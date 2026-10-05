@@ -22,29 +22,42 @@ LAUNCHER_SWIFT = r"""
 import Foundation
 let home = FileManager.default.homeDirectoryForCurrentUser.path
 let logPath = home + "/.photo_tidy/server.log"
+// 상주 앱이라 로그가 끝없이 자람 → 5MB 넘으면 새로 시작
+if let size = (try? FileManager.default.attributesOfItem(atPath: logPath))?[.size] as? Int, size > 5_000_000 {
+    try? FileManager.default.removeItem(atPath: logPath)
+}
 if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
 let log = FileHandle(forWritingAtPath: logPath)!
 log.seekToEndOfFile()
-log.write("\n=== \(Date()) photo-tidy server 시작 ===\n".data(using: .utf8)!)
+func say(_ s: String) { log.write("\(s)\n".data(using: .utf8)!) }
 let args = Array(CommandLine.arguments.dropFirst())
-let p = Process()
-p.executableURL = URL(fileURLWithPath: home + "/.local/bin/photo-tidy")
-p.arguments = args.isEmpty ? ["--tailscale", "--no-open"] : args
 var env = ProcessInfo.processInfo.environment
 env["PYTHONUNBUFFERED"] = "1"
-p.environment = env
-p.standardOutput = log
-p.standardError = log
-// 이 앱이 살아 있어야 서버(자식)가 이 앱의 전체 디스크 접근 권한을 씀 → 서버가 끝날 때까지 대기
-p.terminationHandler = { exit($0.terminationStatus) }
+var server: Process?
+// 이 앱이 살아 있어야 서버(자식)가 이 앱의 전체 디스크 접근 권한을 씀 → 계속 떠 있으면서
+// 서버가 끝나면(오류·Tailscale 늦게 켜짐·업데이트 후 kill) 30초 뒤 다시 실행
+func start() {
+    say("\n=== \(Date()) photo-tidy server 시작 ===")
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: home + "/.local/bin/photo-tidy")
+    p.arguments = args.isEmpty ? ["--tailscale", "--no-open"] : args
+    p.environment = env
+    p.standardOutput = log
+    p.standardError = log
+    p.terminationHandler = { proc in
+        say("서버 종료 (코드 \(proc.terminationStatus)) — 30초 뒤 다시 실행")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { start() }
+    }
+    do { try p.run(); server = p } catch {
+        say("서버 실행 실패: \(error) — ~/.local/bin/photo-tidy 가 있는지 확인 (uv tool install)")
+        exit(1)
+    }
+}
 signal(SIGTERM, SIG_IGN)
 let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-term.setEventHandler { p.terminate(); exit(0) }  // 런처가 꺼지면 서버도 끔
+term.setEventHandler { server?.terminate(); exit(0) }  // 런처가 꺼지면 서버도 끔
 term.resume()
-do { try p.run() } catch {
-    log.write("서버 실행 실패: \(error) — ~/.local/bin/photo-tidy 가 있는지 확인 (uv tool install)\n".data(using: .utf8)!)
-    exit(1)
-}
+start()
 dispatchMain()
 """
 
@@ -86,10 +99,16 @@ def install(app: Path = APP, plist: Path = PLIST, build=build_launcher, run=subp
     plist.write_text(plist_xml(app))
     domain = f"gui/{os.getuid()}"
     run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)  # 예전 등록이 있으면 내림
+    _stop(app, run)  # 떠 있는 서버는 새 코드로 다시 뜨도록 종료 (open은 이미 실행 중인 앱을 다시 안 띄움)
     run(["launchctl", "bootstrap", domain, str(plist)], check=True, capture_output=True)
 
 
 def uninstall(app: Path = APP, plist: Path = PLIST, run=subprocess.run) -> None:
     run(["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], capture_output=True)
-    run(["pkill", "-TERM", "-f", str(app / "Contents/MacOS")], capture_output=True)  # 런처가 서버도 함께 끔
+    _stop(app, run)
     plist.unlink(missing_ok=True)
+
+
+def _stop(app: Path, run) -> None:
+    # 런처가 서버도 함께 끔. 새 서버가 포트를 못 잡으면 런처가 30초 뒤 다시 시도
+    run(["pkill", "-TERM", "-f", str(app / "Contents/MacOS")], capture_output=True)

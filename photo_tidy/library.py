@@ -46,6 +46,7 @@ def load(library: str | None = None) -> list[Photo]:
             has_original=bool(p.path) and os.path.exists(p.path),
             failure=p.score.failure if p.score else 0.0,
             burst_extra=bool(p.burst) and not (p.burst_selected or p.burst_default_pick),
+            duration=(p.exif_info.duration or 0.0) if p.ismovie and p.exif_info else 0.0,
         ))
     return out
 
@@ -469,8 +470,21 @@ class PreviewQueue:
 
     def _launch(self) -> None:
         PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        trim_log(CACHE_DIR / "helper.log")  # 헬퍼가 꺼져 있을 때만 여기 옴 → 지워도 안전
         subprocess.run(["open", "-g", "-n", str(_helper()), "--args", "serve", str(self.qfile), str(PREVIEW_DIR),
                         str(self.conc)], capture_output=True, timeout=30)
+
+
+LOG_MAX = 5_000_000
+
+
+def trim_log(path: Path) -> None:
+    """상주 서버의 로그가 끝없이 자라지 않게 — 너무 크면 새로 시작."""
+    try:
+        if path.stat().st_size > LOG_MAX:
+            path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 VIDEO_DIR = CACHE_DIR / "videos"

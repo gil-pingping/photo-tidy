@@ -259,7 +259,8 @@ class App:
             vs = sorted((p for p in self.photos if p.is_movie), key=lambda p: -p.size)
             offset, limit = int(q.get("offset", ["0"])[0]), min(int(q.get("limit", ["40"])[0]), 200)
             return {"total": len(vs), "size": sum(p.size for p in vs),
-                    "items": [brief(p) | {"frames": len(self.frames(p.uuid))} for p in vs[offset:offset + limit]]}
+                    "items": [brief(p) | {"frames": len(self.frames(p.uuid)), "duration": round(p.duration)}
+                              for p in vs[offset:offset + limit]]}
         if name == "filters":
             out = {}
             for key, (keep, _) in FILTERS.items():

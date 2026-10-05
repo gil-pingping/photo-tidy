@@ -463,7 +463,7 @@ def test_videos_list_sorted_with_frames(tmp_path):
         thumb = lib / f"masters/{u[0]}/{u}_4_5005_c.jpeg"
         thumb.parent.mkdir(parents=True, exist_ok=True)
         thumb.write_bytes(b"T")
-        ps.append(Photo(uuid=u, date=T0, size=size, is_movie=True, thumb=str(thumb)))
+        ps.append(Photo(uuid=u, date=T0, size=size, is_movie=True, thumb=str(thumb), duration=size / 10 + 0.4))
     cvt = lib / "cvt/b/big"
     cvt.mkdir(parents=True)
     for i in range(8):
@@ -472,6 +472,7 @@ def test_videos_list_sorted_with_frames(tmp_path):
     r = app.get("videos", {"limit": ["2"]})
     assert (r["total"], r["size"]) == (3, 1210)
     assert [(i["uuid"], i["frames"]) for i in r["items"]] == [("big", 8), ("mid", 0)]  # 큰 순, 장면 미리보기 수
+    assert [i["duration"] for i in r["items"]] == [90, 30]  # 초 (반올림)
     assert [i["uuid"] for i in app.get("videos", {"offset": ["2"]})["items"]] == ["small"]
 
 

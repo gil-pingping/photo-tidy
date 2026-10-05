@@ -47,6 +47,7 @@ class Photo:
     has_original: bool = False  # 원본이 Mac에 있음 (영상 재생 준비가 몇 초면 됨)
     failure: float = 0.0  # Apple 실패작 점수 (음수일수록 어둡·흐림·실수로 찍힌 사진)
     burst_extra: bool = False  # iPhone 연사에서 대표가 아닌 나머지
+    duration: float = 0.0  # 영상 길이(초)
 
 
 def has_gps(p: Photo) -> bool:

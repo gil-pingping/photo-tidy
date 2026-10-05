@@ -4,6 +4,7 @@ from datetime import datetime
 from PIL import Image, ImageDraw
 
 from photo_tidy.analyze import DEFAULT, Photo
+from photo_tidy import library
 from photo_tidy.library import add_hashes
 
 
@@ -117,3 +118,14 @@ def test_video_jobs_start_once_and_report(tmp_path, monkeypatch):
     (tmp_path / "v.mp4.err").unlink()
     (tmp_path / "v.mp4").write_bytes(b"x")
     assert jobs.start("v") == "ready"
+
+
+def test_big_helper_log_is_reset_before_launch(tmp_path, monkeypatch):
+    log = tmp_path / "helper.log"
+    log.write_bytes(b"x" * (library.LOG_MAX + 1))
+    library.trim_log(log)
+    assert not log.exists()  # 헬퍼가 꺼져 있을 때만 호출 → 지워도 안전
+    log.write_text("small")
+    library.trim_log(log)
+    assert log.read_text() == "small"
+    library.trim_log(tmp_path / "none.log")  # 없으면 무시

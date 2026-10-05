@@ -12,7 +12,7 @@ Tidy your **iCloud / Mac Photos** library from a local web UI — on your Mac, o
 |---|---|
 | **Similar groups** | Shots taken in a row at the same spot (≤5 min, ≤100 m, perceptually similar) are grouped; the best one is suggested (★), the rest are marked as delete candidates. One key/tap confirms the whole group. |
 | **All** | The whole library by month. Filters: 📱 screenshots · 😵 failed shots (Apple's on-device "failure" score) · 💥 burst leftovers · 🎬 videos · oldest. Select by tap, by month, or the whole filter. |
-| **Videos** | Largest first, with the storyboard frames Photos keeps locally — see what a video is without downloading it. |
+| **Videos** | Largest first, with duration and the storyboard frames Photos keeps locally — see what a video is without downloading it. Favorites are marked ★. |
 | **Size / Places / Trips** | Biggest items, country › city, and trips detected automatically (consecutive days ≥50 km from every "home"). |
 | **Candidates** | Everything you marked, to review once more before deleting; remove items with ↩. |
 
@@ -69,7 +69,9 @@ photo-tidy --install-autostart     # builds a tiny "photo-tidy server" app + a L
 photo-tidy --uninstall-autostart
 ```
 
-macOS ties Full Disk Access to the app that starts the server, so after installing, add **photo-tidy server** (in `~/.photo_tidy/`) to *Full Disk Access* once. Logs: `~/.photo_tidy/server.log`.
+macOS ties Full Disk Access to the app that starts the server, so after installing, add **photo-tidy server** (in `~/.photo_tidy/`) to *Full Disk Access* once. Logs: `~/.photo_tidy/server.log` (reset above 5 MB).
+
+If the server exits (crash, Tailscale not up yet, port busy), the launcher restarts it after 30 s. To run new code after `uv tool install --force --reinstall …`, just `pkill -f bin/photo-tidy` — or re-run `--install-autostart`.
 
 ## How it works
 

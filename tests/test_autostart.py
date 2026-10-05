@@ -18,6 +18,7 @@ def test_install_and_uninstall(tmp_path):
     autostart.install(app=app, plist=plist, build=built.append, run=run)
     assert built == [app] and plist.exists()
     assert ["launchctl", "bootstrap"] == calls[-1][:2] and calls[-1][-1] == str(plist)
+    assert any(c[0] == "pkill" for c in calls)  # 다시 설치 = 떠 있는 서버를 새 코드로 재시작
     calls.clear()
     autostart.uninstall(app=app, plist=plist, run=run)
     assert not plist.exists()
