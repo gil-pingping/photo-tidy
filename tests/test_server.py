@@ -202,7 +202,7 @@ def test_candidates_and_delete(tmp_path):
         c = json.loads(get(base + "/api/candidates")[1])
         assert (c["count"], c["size"], c["uuids"]) == (3, 30, ["u0", "u1", "u2"])
         code, r = post(base + "/api/delete", {})
-        assert code == 200 and r == {"deleted": 2}
+        assert code == 200 and r == {"deleted": 2, "bytes": 20}
         assert deleted_calls == [["u0", "u1", "u2"]]
         s = json.loads(get(base + "/api/summary")[1])
         assert s["count"] == 3 and "u0" not in app.by_uuid
@@ -413,3 +413,73 @@ def test_unmark_restores_group_and_album(tmp_path):
         app.unmark("u0")  # 이미 되돌림
     app.mark("u0", [])  # 전부 남기기도 되돌릴 수 있음 (앨범 작업 없음)
     assert app.unmark("u0") == {"ok": True, "removed": 0} and removed == [["u1", "u2"]]
+
+
+def browse_photos():
+    d = lambda days: T0 + timedelta(days=days)  # noqa: E731
+    return [Photo(uuid="new", date=d(9), size=5),
+            Photo(uuid="shot", date=d(8), size=1, is_screenshot=True),
+            Photo(uuid="bad2", date=d(7), size=1, failure=-0.5),
+            Photo(uuid="bad1", date=d(6), size=1, failure=-0.2),
+            Photo(uuid="ok", date=d(5), size=1, failure=-0.01),
+            Photo(uuid="extra", date=d(4), size=1, burst_extra=True),
+            Photo(uuid="vid", date=d(3), size=900, is_movie=True, failure=-0.9),  # 영상은 실패작 판정 제외
+            Photo(uuid="old", date=d(0), size=2)]
+
+
+def test_browse_filters_sort_and_paging(tmp_path):
+    base, srv = serve(App(browse_photos(), lambda u: None, tmp_path / "s.json"))
+    try:
+        f = json.loads(get(base + "/api/filters")[1])
+        assert {k: v["count"] for k, v in f.items()} == {"all": 8, "old": 8, "screenshot": 1, "fail": 2, "burst": 1, "movie": 1}
+        assert f["movie"]["size"] == 900
+        uu = lambda q: [i["uuid"] for i in json.loads(get(base + "/api/all?" + q)[1])["items"]]  # noqa: E731
+        assert uu("filter=all&limit=3") == ["new", "shot", "bad2"]  # 최신순
+        assert uu("filter=all&offset=3&limit=2") == ["bad1", "ok"]  # 이어서
+        assert uu("filter=old&limit=2") == ["old", "vid"]
+        assert uu("filter=fail") == ["bad2", "bad1"]  # 실패작에 가까운 순
+        assert uu("filter=screenshot") == ["shot"] and uu("filter=burst") == ["extra"]
+        r = json.loads(get(base + "/api/all?filter=fail&limit=1&ids=1")[1])
+        assert (r["total"], r["size"], r["uuids"]) == (2, 2, ["bad2", "bad1"])  # 필터 전체 선택용
+        with pytest.raises(urllib.error.HTTPError) as e:
+            get(base + "/api/all?filter=nope")
+        assert e.value.code == 404
+    finally:
+        srv.shutdown()
+
+
+def test_add_candidates_in_chunks(tmp_path):
+    calls = []
+    ps = [Photo(uuid=f"p{i}", date=T0 + timedelta(seconds=i), size=1) for i in range(1200)]
+    app = App(ps, calls.append, tmp_path / "s.json")
+    assert app.add_candidates([p.uuid for p in ps])["added"] == 1200
+    assert [len(c) for c in calls] == [500, 500, 200]  # osascript 인자·시간 한계 → 나눠서
+
+
+def test_videos_list_sorted_with_frames(tmp_path):
+    lib = tmp_path / "lib/resources/derivatives"
+    ps = []
+    for u, size in [("small", 10), ("big", 900), ("mid", 300)]:
+        thumb = lib / f"masters/{u[0]}/{u}_4_5005_c.jpeg"
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        thumb.write_bytes(b"T")
+        ps.append(Photo(uuid=u, date=T0, size=size, is_movie=True, thumb=str(thumb)))
+    cvt = lib / "cvt/b/big"
+    cvt.mkdir(parents=True)
+    for i in range(8):
+        (cvt / f"big_cvt_t000{i}.jpeg").write_bytes(b"F")
+    app = App(ps + series(2), lambda u: None, tmp_path / "s.json")
+    r = app.get("videos", {"limit": ["2"]})
+    assert (r["total"], r["size"]) == (3, 1210)
+    assert [(i["uuid"], i["frames"]) for i in r["items"]] == [("big", 8), ("mid", 0)]  # 큰 순, 장면 미리보기 수
+    assert [i["uuid"] for i in app.get("videos", {"offset": ["2"]})["items"]] == ["small"]
+
+
+def test_delete_reports_and_accumulates_freed_bytes(tmp_path):
+    stats = tmp_path / "stats.json"
+    mk = lambda: App(series(4), lambda u: None, tmp_path / "s.json", stats_file=stats,  # noqa: E731
+                     list_album=lambda: ["u0", "u1"], delete=lambda uuids: uuids)
+    app = mk()
+    assert app.get("summary", {})["deleted_bytes"] == 0
+    assert app.delete_candidates() == {"deleted": 2, "bytes": 20}
+    assert mk().get("summary", {})["deleted_bytes"] == 20  # 재시작해도 누적 유지

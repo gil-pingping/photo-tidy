@@ -49,7 +49,11 @@ for i in range(8):  # 광안리 노을
     add(f"busan{i}", busan + timedelta(seconds=30 * i), 35.153, 129.118, "부산",
         scene(f"busan{i}", "#f4a261", "#264653", 60 + rnd.randint(-10, 10)))
 add("movie0", jeju + timedelta(hours=3), 33.394, 126.239, "제주시", is_movie=True)
-photos[-1].size = 480_000_000
+photos[-1].size = 480_000_000  # movie0
+for i in range(4):  # 스크린샷 (📷 전체 › 📱 스크린샷 필터)
+    add(f"shot{i}", t + timedelta(days=40, hours=i), None, None, None, scene(f"shot{i}", "#ffffff", "#dddddd", 150), is_screenshot=True)
+for i in range(3):  # 실패작 (어둡게 찍힘)
+    add(f"fail{i}", t + timedelta(days=50, hours=i), 37.5665, 126.978, "서울", scene(f"fail{i}", "#050505", "#0a0a0a", 100), failure=-0.4)
 
 for p in photos:
     p.preview = p.thumb  # 데모는 썸네일 = 크게 보기

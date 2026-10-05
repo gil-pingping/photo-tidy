@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -48,6 +49,19 @@ def parse_params(body, base: analyze.Params) -> analyze.Params:
     return replace(base, **out)
 
 
+# 📷 전체 탭 필터: (조건, 정렬 키). failure < -0.1 = 실 라이브러리 표본을 눈으로 본 결과 대부분 실패작
+# (하얗거나 새까만 화면, 실수로 찍힘, 흔들림). Apple 점수 overall=0은 '미분석'이 섞여 있어 기준으로 못 씀.
+FAIL_MAX = -0.1
+FILTERS = {
+    "all": (lambda p: True, lambda p: -p.date.timestamp()),
+    "old": (lambda p: True, lambda p: p.date.timestamp()),
+    "screenshot": (lambda p: p.is_screenshot, lambda p: -p.date.timestamp()),
+    "fail": (lambda p: not p.is_movie and p.failure < FAIL_MAX, lambda p: p.failure),
+    "burst": (lambda p: p.burst_extra, lambda p: -p.date.timestamp()),
+    "movie": (lambda p: p.is_movie, lambda p: -p.size),
+}
+
+
 def locked(fn):
     """상태를 바꾸는 작업은 한 번에 하나씩 (멀티스레드 서버). 읽기는 재할당만 하므로 잠금 불필요."""
     def wrapper(self, *a, **kw):
@@ -59,9 +73,12 @@ def locked(fn):
 class App:
     def __init__(self, photos, add_to_album, state_file: Path, *, settings_file: Path | None = None,
                  list_album=lambda: [], delete=None, prefetch=lambda uuids: None, forget=lambda uuids: None,
-                 preview_dir: Path | None = None, videos=None, reload=None, remove_from_album=None):
+                 preview_dir: Path | None = None, videos=None, reload=None, remove_from_album=None,
+                 stats_file: Path | None = None):
         self.lock = threading.RLock()
         self.remove_from_album = remove_from_album
+        self.stats_file = stats_file  # 지금까지 이 앱으로 지운 장수·용량 (공간 확보 안내용)
+        self.stats = library.read_json(stats_file, {}) if stats_file else {}
         self.last_marks: dict[str, list[str]] = {}  # 묶음 id → 후보로 보낸 사진 (이번 실행 동안 되돌리기용)
         self.photos = photos
         self.videos, self.reload_fn = videos, reload
@@ -136,8 +153,7 @@ class App:
         del self.last_marks[group_id]
         return {"ok": True, "removed": removed}
 
-    @locked
-    def remove_candidates(self, uuids: list[str]) -> dict:
+    def remove_candidates(self, uuids: list[str]) -> dict:  # 앱 상태를 안 바꿈 → 잠금 없이 (확정을 막지 않게)
         """후보 취소: 삭제 후보 앨범에서 빼기 (사진은 그대로)."""
         if self.remove_from_album is None:
             raise RuntimeError("후보 취소 기능 없음")
@@ -146,13 +162,13 @@ class App:
         except Exception as e:
             raise RuntimeError(f"앨범에서 빼기 실패: {e}") from e
 
-    @locked
-    def add_candidates(self, uuids: list[str]) -> dict:
+    def add_candidates(self, uuids: list[str]) -> dict:  # 앱 상태를 안 바꿈 → 잠금 없이 (대량 추가 중에도 확정 가능)
         """묶음 밖(용량·위치·여행 탭)에서 사진·영상을 삭제 후보 앨범에 바로 넣기."""
         if not uuids or not all(u in self.by_uuid for u in uuids):
             raise ValueError("모르는 사진")
         try:
-            self.add_to_album(uuids)
+            for i in range(0, len(uuids), 500):  # osascript 인자·시간 한계 → 나눠서
+                self.add_to_album(uuids[i:i + 500])
         except Exception as e:
             raise RuntimeError(f"앨범 추가 실패: {e}") from e
         return {"ok": True, "added": len(uuids)}
@@ -198,10 +214,14 @@ class App:
         if self.delete is None:
             raise RuntimeError("삭제 기능 없음")
         gone = set(self.delete(self.list_album()))  # macOS 확인 창 → 최근 삭제된 항목
+        freed = sum(self.by_uuid[u].size for u in gone if u in self.by_uuid)
         self.photos = [p for p in self.photos if p.uuid not in gone]
         self.recompute()
         self._evict(sorted(gone))
-        return {"deleted": len(gone)}
+        self.stats = {"deleted": self.stats.get("deleted", 0) + len(gone), "bytes": self.stats.get("bytes", 0) + freed}
+        if self.stats_file:
+            library.write_json(self.stats_file, self.stats)
+        return {"deleted": len(gone), "bytes": freed}
 
     def pending(self) -> dict:
         return {gid: g for gid, g in self.groups.items() if not all(p.uuid in self.reviewed for p in g)}
@@ -211,7 +231,8 @@ class App:
             return {"count": len(self.photos), "size": sum(p.size for p in self.photos),
                     "movies": sum(p.is_movie for p in self.photos),
                     "by_year": analyze.size_by_year(self.photos),
-                    "groups": len(self.pending()), "trips": len(self.trips)}
+                    "groups": len(self.pending()), "trips": len(self.trips),
+                    "deleted_bytes": self.stats.get("bytes", 0)}
         if name == "size":
             kind = q.get("kind", ["all"])[0]
             ps = [p for p in self.photos if kind == "all" or p.is_movie == (kind == "movie")]
@@ -234,6 +255,28 @@ class App:
         if name == "settings":
             return {"values": asdict(self.params), "defaults": asdict(analyze.DEFAULT),
                     "groups": len(self.pending()), "trips": len(self.trips)}
+        if name == "videos":  # 영상 정리 화면: 큰 순, 장면 미리보기 수 (원본 없이 내용 확인)
+            vs = sorted((p for p in self.photos if p.is_movie), key=lambda p: -p.size)
+            offset, limit = int(q.get("offset", ["0"])[0]), min(int(q.get("limit", ["40"])[0]), 200)
+            return {"total": len(vs), "size": sum(p.size for p in vs),
+                    "items": [brief(p) | {"frames": len(self.frames(p.uuid))} for p in vs[offset:offset + limit]]}
+        if name == "filters":
+            out = {}
+            for key, (keep, _) in FILTERS.items():
+                ps = [p for p in self.photos if keep(p)]
+                out[key] = {"count": len(ps), "size": sum(p.size for p in ps)}
+            return out
+        if name == "all":
+            key = q.get("filter", ["all"])[0]
+            if key not in FILTERS:
+                raise KeyError(key)
+            keep, order = FILTERS[key]
+            ps = sorted((p for p in self.photos if keep(p)), key=order)
+            offset, limit = int(q.get("offset", ["0"])[0]), min(int(q.get("limit", ["300"])[0]), 1000)
+            out = {"total": len(ps), "size": sum(p.size for p in ps), "items": [brief(p) for p in ps[offset:offset + limit]]}
+            if q.get("ids") == ["1"]:  # 필터 전체 선택용
+                out["uuids"] = [p.uuid for p in ps]
+            return out
         if name == "candidates":
             uuids = self.list_album()
             return {"count": len(uuids), "size": sum(self.by_uuid[u].size for u in uuids if u in self.by_uuid),
@@ -275,7 +318,9 @@ def client_ok(ip: str, nets) -> bool:
 def tailscale_info() -> tuple[str, str]:
     """(Tailscale IPv4, MagicDNS 이름). 꺼져 있으면 RuntimeError."""
     exe = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-    r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=10)
+    # TERM이 없으면(로그인 항목 등) Tailscale 앱 실행 파일이 CLI가 아니라 GUI로 동작하려다 실패함 (실측)
+    env = {**os.environ, "TERM": os.environ.get("TERM", "xterm")}
+    r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=10, env=env)
     me = json.loads(r.stdout or "{}").get("Self") or {}
     ips = [i for i in me.get("TailscaleIPs", []) if "." in i]
     if r.returncode != 0 or not ips:
@@ -374,6 +419,8 @@ def make_handler(app: App, allowed_hosts: set[str] | None = None, allowed_nets=N
                     return self._json(200, app.get(url.path.removeprefix("/api/"), parse_qs(url.query)))
                 except KeyError:
                     pass
+                except ValueError:  # offset·limit 숫자 아님
+                    return self._json(400, {"error": "잘못된 요청"})
             self._json(404, {"error": "not found"})
 
         def do_POST(self):
@@ -439,18 +486,37 @@ def main(argv=None):
     ap.add_argument("--no-open", action="store_true", help="브라우저 자동 열기 끄기")
     ap.add_argument("--tailscale", action="store_true",
                     help="내 Tailscale 기기(태블릿·폰)에서 접속 — 같은 Wi-Fi의 다른 기기는 차단")
+    ap.add_argument("--install-autostart", action="store_true", help="로그인할 때 자동 실행 (--tailscale)")
+    ap.add_argument("--uninstall-autostart", action="store_true", help="자동 실행 해제")
     a = ap.parse_args(argv)
+    if a.install_autostart or a.uninstall_autostart:
+        from . import autostart
+        if a.uninstall_autostart:
+            autostart.uninstall()
+            sys.exit("자동 실행을 해제했습니다.")
+        print("런처 앱 빌드 중… (swiftc)", flush=True)
+        autostart.install()
+        subprocess.run(["open", "-R", str(autostart.APP)])  # Finder에서 앱 보여주기 (권한 목록에 끌어 넣기용)
+        subprocess.run(["open", "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles"])
+        sys.exit(f"자동 실행 등록 완료 — 로그인할 때 '{autostart.APP.stem}' 앱이 서버를 띄웁니다.\n"
+                 "→ 열린 '전체 디스크 접근 권한' 목록에 Finder의 'photo-tidy server' 앱을 끌어 넣고 켜 주세요 (최초 1회).\n"
+                 f"→ 로그: {autostart.CACHE_DIR / 'server.log'}")
     if a.tailscale:
-        try:
-            ts_ip, ts_name = tailscale_info()
-        except Exception as e:
-            sys.exit(f"Tailscale을 쓸 수 없음: {e}\n→ Mac에서 Tailscale을 켜고 다시 실행하세요.")
+        for attempt in range(25):  # 로그인 직후엔 Tailscale이 아직 안 켜졌을 수 있음 → 최대 ~2분 대기
+            try:
+                ts_ip, ts_name = tailscale_info()
+                break
+            except Exception as e:
+                if attempt == 24:
+                    sys.exit(f"Tailscale을 쓸 수 없음: {e}\n→ Mac에서 Tailscale을 켜고 다시 실행하세요.")
+                print(f"Tailscale 기다리는 중… ({e})", flush=True)
+                time.sleep(5)
     print("Photos 라이브러리 읽는 중…", flush=True)
     try:
         photos = library.load(a.library)
     except Exception as e:
         sys.exit(f"라이브러리를 읽을 수 없음: {e}\n→ 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에 "
-                 "이 터미널 앱을 추가하고 다시 실행하세요.")
+                 "서버를 띄운 앱(터미널, 또는 자동 실행이면 'photo-tidy server')을 추가하고 다시 실행하세요.")
     library.add_hashes(photos)
 
     def reload_library():
@@ -464,7 +530,8 @@ def main(argv=None):
               settings_file=library.CACHE_DIR / "settings.json",
               list_album=library.album_uuids, delete=library.delete_photos,
               prefetch=previews.push, forget=previews.forget, preview_dir=library.PREVIEW_DIR,
-              videos=library.VideoJobs(), reload=reload_library, remove_from_album=library.remove_from_album)
+              videos=library.VideoJobs(), reload=reload_library, remove_from_album=library.remove_from_album,
+              stats_file=library.CACHE_DIR / "stats.json")
     if n := app.prune_previews():
         print(f"다 본 사진의 고화질 캐시 {n}장 정리", flush=True)
     try:
@@ -481,7 +548,10 @@ def main(argv=None):
         allowed = {f"{h}:{a.port}" for h in ("localhost", "127.0.0.1", ts_ip, short, ts_name)}
         url = f"http://{short}:{a.port}"
     # 멀티스레드: 영상 전송·새로고침 중에도 썸네일이 막히지 않게. 상태 변경은 App.lock으로 직렬화
-    srv = ThreadingHTTPServer((host, a.port), make_handler(app, allowed, nets))
+    try:
+        srv = ThreadingHTTPServer((host, a.port), make_handler(app, allowed, nets))
+    except OSError as e:
+        sys.exit(f"포트 {a.port}을(를) 쓸 수 없음 ({e.strerror}) — 이미 실행 중이면 http://localhost:{a.port} 를 여세요.")
     srv.daemon_threads = True
     print(f"사진 {len(photos)}장, 묶음 {len(app.groups)}개, 여행 {len(app.trips)}개 → {url}", flush=True)
     if a.tailscale:

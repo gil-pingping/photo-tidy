@@ -44,6 +44,8 @@ def load(library: str | None = None) -> list[Photo]:
             city=addr.city if addr else None, country=addr.country if addr else None,
             thumb=thumb, preview=preview, face=face, eyes_closed=eyes_closed, smile=smile,
             has_original=bool(p.path) and os.path.exists(p.path),
+            failure=p.score.failure if p.score else 0.0,
+            burst_extra=bool(p.burst) and not (p.burst_selected or p.burst_default_pick),
         ))
     return out
 
@@ -104,7 +106,14 @@ ALBUM_SCRIPT = """on run argv
 end run"""
 
 
-def add_to_album(uuids: list[str], run=subprocess.run) -> None:
+def add_to_album(uuids: list[str], run=subprocess.run, helper=None) -> None:
+    """삭제 후보 앨범에 넣기. PhotoKit 헬퍼가 기본 (실측 914장 1.3초) — AppleScript는 500장에 ~75초라
+    대량 추가 동안 다른 작업이 몇 분씩 멈춘 것처럼 보였음. 헬퍼가 안 되면 AppleScript로."""
+    try:
+        (helper or _run_helper)("album", uuids, ALBUM)
+        return
+    except Exception:
+        pass
     r = run(["osascript", "-e", ALBUM_SCRIPT, ALBUM, *uuids], capture_output=True, text=True, timeout=300)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or f"osascript exit {r.returncode}")
@@ -133,6 +142,7 @@ def album_uuids(run=subprocess.run) -> list[str]:
 #  serve <대기열파일> <출력폴더> <N> : 상주하며 크게 보기용 1600px JPEG를 iCloud에서 받음 (저장 공간 최적화로 로컬엔 480px뿐).
 #                                    대기열 파일을 0.3초마다 읽어 항상 N장 동시 다운로드. 5분 할 일 없거나
 #                                    대기열 파일이 사라지면 진행 중인 요청을 마치고 종료.
+#  album <앨범이름> <ids파일>       : 앨범에 넣기 (없으면 만듦) — AppleScript는 500장에 ~75초, PhotoKit은 한 번에.
 #  unalbum <앨범이름> <ids파일>     : 앨범에서 빼기 (후보 취소) — Photos AppleScript엔 앨범에서 빼는 명령이 없음.
 #  video <uuid> <출력.mp4>           : 영상 재생용 540p mp4 (iCloud 중간 화질 받아 변환 — 안드로이드 Chrome도 재생).
 #                                    실패하면 <출력.mp4>.err 에 사유.
@@ -239,6 +249,26 @@ func serve(_ qPath: String, _ outDir: String, _ conc: Int, _ size: Int) {
         }
     }
 }
+func album(_ name: String, _ idsPath: String) {
+    let ids = ((try? String(contentsOfFile: idsPath, encoding: .utf8)) ?? "")
+        .split(separator: "\n").map { String($0) + "/L0/001" }
+    try? FileManager.default.removeItem(atPath: idsPath)
+    let o = PHFetchOptions()
+    o.predicate = NSPredicate(format: "title = %@", name)
+    let existing = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: o).firstObject
+    let assets = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+    if assets.count == 0 { finish(["added": 0]) }
+    PHPhotoLibrary.shared().performChanges({
+        let req = existing != nil ? PHAssetCollectionChangeRequest(for: existing!)
+                                  : PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: name)
+        req?.addAssets(assets)
+    }) { ok, err in
+        DispatchQueue.main.async {
+            if ok { finish(["added": assets.count]) }
+            finish(["error": err?.localizedDescription ?? "앨범에 넣기 실패"])
+        }
+    }
+}
 func unalbum(_ name: String, _ idsPath: String) {
     let ids = ((try? String(contentsOfFile: idsPath, encoding: .utf8)) ?? "")
         .split(separator: "\n").map { String($0) + "/L0/001" }
@@ -294,6 +324,7 @@ PHPhotoLibrary.requestAuthorization(for: .readWrite) { s in
         func opt(_ i: Int, _ d: Int) -> Int { args.count > i ? Int(args[i]) ?? d : d }
         if mode == "serve" { serve(args[2], args[3], opt(4, 2), opt(5, 1600)) }
         else if mode == "unalbum" { unalbum(args[2], args[3]) }
+        else if mode == "album" { album(args[2], args[3]) }
         else if mode == "video" { video(args[2], args[3], opt(4, 2), args.count > 5 ? args[5] : AVAssetExportPreset960x540) }
         else { delete(args[2]) }  // 비동기 시작만 하고 돌아옴
     }

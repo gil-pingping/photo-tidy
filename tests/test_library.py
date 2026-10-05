@@ -59,11 +59,17 @@ def test_add_to_album_passes_uuids_and_surfaces_errors():
 
     from photo_tidy.library import ALBUM, add_to_album
 
-    calls = []
-    add_to_album(["A", "B"], run=lambda cmd, **kw: calls.append(cmd) or CompletedProcess(cmd, 0, "", ""))
+    def no_helper(*a):
+        raise RuntimeError("헬퍼 없음")
+
+    helped = []
+    add_to_album(["A"], run=None, helper=lambda *a: helped.append(a))  # 기본: PhotoKit 헬퍼
+    assert helped == [("album", ["A"], ALBUM)]
+    calls = []  # 헬퍼 실패 → AppleScript
+    add_to_album(["A", "B"], run=lambda cmd, **kw: calls.append(cmd) or CompletedProcess(cmd, 0, "", ""), helper=no_helper)
     assert calls[0][0] == "osascript" and calls[0][3:] == [ALBUM, "A", "B"]
     with pytest.raises(RuntimeError, match="-1743"):
-        add_to_album(["A"], run=lambda cmd, **kw: CompletedProcess(cmd, 1, "", "Not authorized (-1743)"))
+        add_to_album(["A"], run=lambda cmd, **kw: CompletedProcess(cmd, 1, "", "Not authorized (-1743)"), helper=no_helper)
 
 
 def test_preview_queue_order_cap_file_and_single_helper(tmp_path, monkeypatch):
