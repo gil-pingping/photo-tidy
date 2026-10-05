@@ -1,0 +1,28 @@
+[project]
+name = "photo-tidy"
+version = "0.1.0"
+description = "Tidy your iCloud / Mac Photos library from a local web UI: burst-group culling, size, places, trips"
+license = "MIT"
+authors = [{ name = "gil-pingping" }]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "imagehash>=4.3.2",
+    "osxphotos>=0.77.2",
+    "pillow>=12.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/gil-pingping/photo-tidy"
+
+[project.scripts]
+photo-tidy = "photo_tidy.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

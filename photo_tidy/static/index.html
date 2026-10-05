@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>photo-tidy</title>
+<style>
+  :root { --bg:#111; --panel:#1c1c1e; --line:#2c2c2e; --text:#eee; --dim:#8e8e93; --keep:#30d158; --drop:#ff453a; --star:#ffd60a; --accent:#0a84ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px -apple-system, BlinkMacSystemFont, sans-serif; }
+  header { position:sticky; top:0; z-index:2; background:var(--panel); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  #stats { color:var(--dim); }
+  nav { display:flex; gap:4px; margin-left:auto; }
+  button { background:#2c2c2e; color:var(--text); border:0; border-radius:8px; padding:7px 12px; font:inherit; cursor:pointer; }
+  button:hover { background:#3a3a3c; }
+  button.on, button.primary { background:var(--accent); }
+  button.danger { background:#5c1a17; color:#ffb4ae; }
+  button.danger:hover { background:#7a221e; }
+  main { padding:16px; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  .bar .info { color:var(--dim); margin-right:auto; }
+  .hint { color:var(--dim); margin:0 0 10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:8px; }
+  .tile { position:relative; aspect-ratio:1; background:#2c2c2e; border-radius:8px; overflow:hidden; cursor:pointer; border:3px solid transparent; }
+  .tile img { width:100%; height:100%; object-fit:cover; display:block; }
+  .tile .lbl { position:absolute; left:0; right:0; bottom:0; padding:4px 6px; font-size:12px; background:linear-gradient(transparent, #000c); }
+  .tile .badge { position:absolute; top:6px; right:6px; font-size:16px; }
+  .tile.keep { border-color:var(--keep); }
+  .tile.drop img { opacity:.35; }
+  .tile.drop .badge::after { content:"✕"; color:var(--drop); font-weight:700; }
+  .tile.keep .badge::after { content:"✓"; color:var(--keep); font-weight:700; }
+  .tile.cur { outline:3px solid var(--accent); outline-offset:2px; }
+  .tile .star { position:absolute; top:6px; left:6px; color:var(--star); font-size:16px; }
+  .rows div.row { display:flex; gap:12px; padding:9px 10px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .rows div.row:hover, .rows div.row.on { background:var(--panel); }
+  .rows .grow { flex:1; }
+  .rows .dim { color:var(--dim); }
+  .years { display:flex; gap:6px; align-items:flex-end; height:90px; margin-bottom:16px; }
+  .years div { flex:0 1 60px; background:var(--accent); border-radius:4px 4px 0 0; position:relative; min-height:2px; }
+  .years span { position:absolute; bottom:-18px; left:0; right:0; text-align:center; font-size:11px; color:var(--dim); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px; margin-bottom:16px; }
+  .card { background:var(--panel); border-radius:10px; padding:12px; cursor:pointer; border:2px solid transparent; }
+  .card.on { border-color:var(--accent); }
+  .card b { display:block; font-size:15px; margin-bottom:4px; }
+  .card span { color:var(--dim); font-size:12px; }
+  #err { display:none; background:var(--drop); color:#fff; padding:10px 16px; }
+  #okmsg { display:none; background:#1f5130; color:#c9f7d4; padding:10px 16px; }
+  .empty { color:var(--dim); padding:40px; text-align:center; }
+  kbd { background:#3a3a3c; border-radius:4px; padding:1px 5px; font-size:12px; }
+  /* 크게 보기 (Space) */
+  #pv { display:none; position:fixed; inset:0; z-index:10; background:#000e; flex-direction:column; align-items:center; justify-content:center; }
+  #pv.open { display:flex; }
+  #pv img { max-width:94vw; max-height:84vh; object-fit:contain; border:4px solid transparent; border-radius:6px; }
+  #pv img.keep { border-color:var(--keep); }
+  #pv img.drop { border-color:var(--drop); opacity:.75; }
+  #pv .cap { margin-top:12px; color:var(--dim); }
+  #pv .cap b { color:var(--text); }
+  #pv { touch-action:none; }  /* 스와이프를 브라우저 스크롤·확대 대신 직접 처리 */
+  .pvbar { display:flex; gap:10px; margin-top:12px; }
+  #pv video { display:none; max-width:94vw; max-height:78vh; border-radius:6px; background:#000; }
+  #pv.video video { display:block; }
+  #pv.video img { display:none; }
+  .pvbar button { min-width:64px; font-size:18px; padding:10px 16px; }
+  .tile { -webkit-touch-callout:none; user-select:none; }  /* 길게 누르기 = 크게 보기 (시스템 메뉴 대신) */
+  #view { touch-action:pan-y; }  /* 세로 스크롤은 브라우저, 가로 밀기는 묶음 이동 */
+  .tile .undo { position:absolute; right:6px; top:6px; z-index:2; font-size:18px; padding:6px 12px; background:#000b; }  /* 아래 크기 띠와 겹치지 않게 */
+  #undo { display:none; position:fixed; left:50%; bottom:90px; transform:translateX(-50%); z-index:8; background:#2c2c2e;
+          border:1px solid #444; border-radius:12px; padding:10px 14px; gap:12px; align-items:center; box-shadow:0 8px 30px #000a; }
+  #undo.show { display:flex; }
+  .gbar { position:fixed; left:0; right:0; bottom:0; z-index:4; display:flex; gap:8px; padding:10px 12px;
+          background:var(--panel); border-top:1px solid var(--line); }
+  .gbar button { flex:1; font-size:17px; padding:14px 0; }
+  .gbar button.primary { flex:2; }
+  @media (pointer: coarse) {  /* 태블릿·폰: 손가락으로 누르기 쉽게 */
+    button { padding:11px 16px; font-size:15px; }
+    .grid { grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); }  /* 얼굴 보기 쉽게 크게 */
+    .key { display:none; }
+    main { padding-bottom:90px; }  /* 하단 버튼 바만큼 */
+    header { flex-wrap:nowrap; }
+    #stats { display:none; }
+    nav { overflow-x:auto; flex-wrap:nowrap; -webkit-overflow-scrolling:touch; }
+    nav button { white-space:nowrap; }
+  }
+  @media (pointer: fine) { .touch { display:none; } }
+  /* ⚙️ 설정 */
+  #st { display:none; position:fixed; top:56px; right:16px; z-index:5; width:360px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; box-shadow:0 10px 40px #000a; }
+  #st.open { display:block; }
+  #st h3 { margin:0 0 4px; font-size:14px; }
+  #st .sec { color:var(--dim); font-size:12px; margin:12px 0 4px; }
+  #st label { display:block; margin:8px 0; }
+  #st .row { display:flex; justify-content:space-between; font-size:13px; }
+  #st .row b { color:var(--accent); }
+  #st input[type=range] { width:100%; }
+  #st .help { color:var(--dim); font-size:11px; }
+  #st .res { margin-top:10px; padding:8px; background:#111; border-radius:8px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>photo-tidy</h1>
+  <span id="stats"></span>
+  <button id="delbtn" class="danger" style="display:none"></button>
+  <button id="reloadbtn" title="Photos 라이브러리 다시 읽기 (새로 찍은 사진·다른 기기에서 지운 사진 반영)">⟳</button>
+  <nav>
+    <button data-tab="groups">비슷한 묶음</button>
+    <button data-tab="size">용량</button>
+    <button data-tab="places">위치</button>
+    <button data-tab="trips">여행</button>
+    <button data-tab="cands">🗑 후보</button>
+    <button id="stbtn" title="추출 파라미터">⚙️</button>
+  </nav>
+</header>
+<div id="err"></div>
+<div id="okmsg"></div>
+<main id="view"></main>
+<div id="undo"></div>
+<div id="pv"><img alt=""><video controls playsinline preload="auto"></video><div class="cap"></div>
+  <div class="pvbar"><button data-a="prev">◀</button><button data-a="keep">✓ / ✕</button><button data-a="next">▶</button><button data-a="play" style="display:none">▶ 재생</button><button data-a="cand" class="danger">🗑 후보로</button><button data-a="close">닫기</button></div>
+</div>
+<div id="st"></div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const view = $("#view");
+const fmt = b => b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " KB";
+const day = iso => iso.slice(0, 10);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const banner = (id, msg) => { const e = $(id); e.textContent = msg; e.style.display = msg ? "block" : "none"; };
+const showErr = msg => banner("#err", msg);
+const showOk = msg => { banner("#okmsg", msg); if (msg) setTimeout(() => banner("#okmsg", ""), 6000); };
+const api = async (path, opts) => {
+  const r = await fetch("/api/" + path, opts);
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || r.status);
+  return body;
+};
+const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+function tile(uuid, label = "", cls = "", star = false, title = "") {
+  if (!["groups", "cands"].includes(current) && CAND.has(uuid)) cls += " drop";  // 다른 탭: 삭제 후보에 넣은 사진은 ✕
+  return `<div class="tile ${cls}" data-uuid="${esc(uuid)}" title="${esc(title)}">` +
+    `<img loading="lazy" src="/thumb/${encodeURIComponent(uuid)}" onerror="this.remove()">` +
+    (star ? `<span class="star">★</span>` : "") + `<span class="badge"></span>` +
+    (label ? `<span class="lbl">${esc(label)}</span>` : "") + `</div>`;
+}
+const thumbs = uuids => uuids.length
+  ? `<div class="grid">${uuids.slice(0, 300).map(u => tile(u)).join("")}</div>` +
+    (uuids.length > 300 ? `<p class="empty">… 외 ${uuids.length - 300}장</p>` : "")
+  : `<p class="empty">사진 없음</p>`;
+
+async function refreshStats() {
+  const s = await api("summary");
+  $("#stats").textContent = `사진 ${s.count.toLocaleString()}장 · ${fmt(s.size)} · 영상 ${s.movies} · 남은 묶음 ${s.groups} · 여행 ${s.trips}`;
+}
+
+// ── 삭제 후보 → 실제 삭제 ─────────────────────
+let CAND = new Set();  // 삭제 후보 앨범에 들어 있는 사진
+async function refreshCandidates() {
+  try {
+    const c = await api("candidates");
+    CAND = new Set(c.uuids);
+    const b = $("#delbtn");
+    b.style.display = c.count ? "" : "none";
+    b.textContent = `🗑 삭제 후보 ${c.count}장 삭제 (${fmt(c.size)})`;
+  } catch (e) { /* 앨범 조회 실패는 버튼만 숨김 */ $("#delbtn").style.display = "none"; }
+}
+$("#delbtn").onclick = async () => {
+  const remote = !["localhost", "127.0.0.1"].includes(location.hostname);
+  if (!confirm("'photo-tidy 삭제 후보' 앨범의 사진을 삭제합니다.\n" +
+    (remote ? "⚠️ 확인 창은 Mac 화면에 뜹니다 — Mac에서 승인해야 삭제됩니다.\n" : "다음에 뜨는 macOS 확인 창에서 한 번 더 승인해야 삭제됩니다.\n") +
+    "삭제된 사진은 Photos '최근 삭제된 항목'에서 30일 동안 복구할 수 있습니다.")) return;
+  const b = $("#delbtn"); b.disabled = true; b.textContent = "macOS 확인 창을 기다리는 중…";
+  try {
+    const r = await post("delete", {});
+    showErr(""); showOk(r.deleted ? `${r.deleted}장 삭제됨 → Photos '최근 삭제된 항목' (30일 내 복구 가능)` : "삭제된 사진 없음 (취소했거나 후보가 비어 있음)");
+    await Promise.all([refreshStats(), refreshCandidates()]);
+    if (current !== "groups") openTab(current);
+  } catch (e) {
+    showErr("삭제 실패: " + e.message);
+  } finally { b.disabled = false; refreshCandidates(); }
+};
+
+// ── 크게 보기 (Space) ───────────────────────
+// list: uuid 배열, i: 위치, keepSet: 묶음 탭이면 남김 집합(X로 전환), 아니면 null
+const PV = { open: false, list: [], i: 0, keepSet: null, onMove: null };
+// 고화질은 서버 대기열이 헬퍼 1개로 iCloud에서 받아옴 (로컬엔 480px뿐).
+// 나중에 보낸 요청이 맨 앞 → 지금 보는 사진이 항상 1순위. 중복·이미 받은 것은 서버가 거름.
+const prefetch = uuids => { if (uuids.length) post("prefetch", { uuids }).catch(() => {}); };
+function pvRender() {
+  const u = PV.list[PV.i], img = $("#pv img");
+  let tries = 0;
+  pvVideo(u);
+  prefetch([u]);  // 지금 보는 사진을 대기열 맨 앞으로
+  img.onload = () => {  // 아직 저화질이면 0.5초 뒤 다시 (고화질 도착하면 바로 교체, 최대 ~90초)
+    if (!PV.movie && img.naturalWidth < 700 && img.naturalHeight < 700 && tries++ < 180)  // 영상은 장면 미리보기를 덮지 않게
+      setTimeout(() => { if (PV.open && !PV.movie && PV.list[PV.i] === u) img.src = `/preview/${encodeURIComponent(u)}?r=${Date.now()}`; }, 500);
+  };
+  img.src = "/preview/" + encodeURIComponent(u);
+  img.className = PV.keepSet ? (PV.keepSet.has(u) ? "keep" : "drop") : "";
+  pvCaption();
+  for (const d of [-1, 1]) { const n = PV.list[PV.i + d]; if (n) new Image().src = "/preview/" + encodeURIComponent(n); }  // 이웃 미리 로드
+}
+// 영상: 열면 Photos가 로컬에 둔 장면 미리보기(8장)를 바로 순환. ▶ 재생은 iCloud 원본을 받아야 해서(4K 몇 분,
+// 그동안 사진 데몬이 막혀 사진 고화질도 느려짐) 버튼을 눌렀을 때만. 원본이 이미 Mac에 있으면 서버가 바로 준비.
+let VS = "", SB = null;  // 영상 상태 문구, 장면 미리보기 타이머
+const stopStoryboard = () => { clearInterval(SB); SB = null; };
+function pvVideo(u, start = false) {
+  const box = $("#pv"), v = $("#pv video"), img = $("#pv img"), play = $("#pv [data-a=play]");
+  if (!start) {
+    box.classList.remove("video"); v.pause(); v.removeAttribute("src");
+    VS = ""; PV.movie = false; play.style.display = "none"; stopStoryboard();
+  }
+  if (PV.keepSet) return;  // 비슷한 묶음은 사진만
+  const check = async st => {
+    if (!PV.open || PV.list[PV.i] !== u) return;
+    try {
+      const r = await post("video", { uuid: u, start: st });
+      if (!PV.open || PV.list[PV.i] !== u || r.status === "not_video") return;
+      PV.movie = true;
+      if (r.frames && !SB && !box.classList.contains("video")) {
+        let i = 0;
+        img.src = `/frame/${encodeURIComponent(u)}/0`;
+        SB = setInterval(() => { i = (i + 1) % r.frames; img.src = `/frame/${encodeURIComponent(u)}/${i}`; }, 700);
+      }
+      play.style.display = r.status === "none" || r.status.startsWith("failed") ? "" : "none";
+      if (r.status === "ready") {
+        stopStoryboard(); VS = "";
+        v.src = "/video/" + encodeURIComponent(u); box.classList.add("video"); v.play().catch(() => {});
+      } else if (r.status === "working") {
+        VS = r.local ? " · 🎬 재생 준비 중…" : " · 🎬 iCloud에서 원본 받는 중… (4K는 몇 분 — 다른 사진 보다 와도 됨)";
+        setTimeout(() => check(false), 3000);
+      } else if (r.status === "none") {
+        VS = r.frames ? ` · 🎬 장면 미리보기 ${r.frames}장 (▶ 재생 = iCloud 원본 받기, 몇 분)` : " · 🎬 ▶ 재생 = iCloud 원본 받기 (몇 분)";
+      } else VS = " · 🎬 실패: " + r.status.replace(/^failed: /, "");
+    } catch (e) { VS = " · 🎬 오류: " + e.message; }
+    pvCaption();
+  };
+  check(start);
+}
+function pvCaption() {
+  const u = PV.list[PV.i];
+  const state = PV.keepSet ? (PV.keepSet.has(u) ? " · <b style='color:var(--keep)'>남김 ✓</b>" : " · <b style='color:var(--drop)'>삭제 후보 ✕</b>") : "";
+  const gp = PV.keepSet && G.list[G.i] ? G.list[G.i].photos.find(p => p.uuid === u) : null;
+  const score = gp ? ` · ${esc(scoreLabel(gp))}${gp.uuid === G.list[G.i].best ? " ★" : ""}` : "";
+  $("#pv [data-a=keep]").style.display = PV.keepSet ? "" : "none";
+  const cb = $("#pv [data-a=cand]");
+  cb.style.display = PV.keepSet ? "none" : "";
+  cb.textContent = CAND.has(u) ? "↩ 후보에서 빼기" : "🗑 후보로";
+  $("#pv .cap").innerHTML = `<b>${PV.i + 1}</b> / ${PV.list.length}${state}${score}${esc(VS)}` +
+    (!PV.keepSet && CAND.has(u) ? " · <b style='color:var(--drop)'>삭제 후보 ✕</b>" : "") +
+    ` <span class="key">&nbsp; <kbd>←</kbd><kbd>→</kbd> 이동` +
+    (PV.keepSet ? ` · <kbd>X</kbd> 남김/후보` : "") + ` · <kbd>Space</kbd>/<kbd>Esc</kbd> 닫기</span>`;
+}
+async function removeCandidate(u) {  // 후보 취소 (앨범에서만 빠지고 사진은 그대로)
+  try {
+    await post("uncandidate", { uuids: [u] });
+    CAND.delete(u);
+    view.querySelectorAll(`.tile[data-uuid="${CSS.escape(u)}"]`).forEach(t => current === "cands" ? t.remove() : t.classList.remove("drop"));
+    pvCaption(); refreshCandidates(); showOk("후보에서 뺐어요 (사진은 그대로)");
+  } catch (e) { showErr("후보 빼기 실패: " + e.message); }
+}
+async function addCandidate(u) {  // 묶음 밖 사진·영상을 삭제 후보 앨범으로
+  try {
+    await post("candidate", { uuids: [u] });
+    CAND.add(u);
+    view.querySelectorAll(`.tile[data-uuid="${CSS.escape(u)}"]`).forEach(t => t.classList.add("drop"));
+    pvCaption(); refreshCandidates();
+  } catch (e) { showErr("후보 추가 실패: " + e.message); }
+}
+function pvOpen(list, i, keepSet = null, onMove = null) {
+  if (!list.length) return;
+  Object.assign(PV, { open: true, list, i, keepSet, onMove });
+  prefetch(list.slice(i, i + 30).concat(list.slice(Math.max(0, i - 10), i)));  // 다음 사진 우선
+  $("#pv").classList.add("open"); pvRender();
+}
+function pvClose() {
+  PV.open = false;
+  const v = $("#pv video"); v.pause(); v.removeAttribute("src"); v.load(); stopStoryboard();
+  $("#pv").classList.remove("open", "video"); $("#pv img").src = "";
+}
+function pvMove(d) {
+  PV.i = Math.max(0, Math.min(PV.list.length - 1, PV.i + d));
+  if (PV.onMove) PV.onMove(PV.i);
+  pvRender();
+}
+// 크게 보기 터치: 좌우 스와이프로 넘기기, 하단 버튼, 배경 탭으로 닫기
+let swipe = null;
+$("#pv").onpointerdown = e => { swipe = e.target.tagName === "VIDEO" ? null : { x: e.clientX, y: e.clientY }; };  // 재생바 끌기는 넘기기 아님
+$("#pv").onpointerup = e => {
+  if (!swipe) return;
+  const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+  swipe = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) { pvMove(dx < 0 ? 1 : -1); PV.swipedAt = Date.now(); }
+};
+$("#pv").onclick = e => {
+  if (Date.now() - (PV.swipedAt || 0) < 400) return;  // 스와이프 끝에 오는 click 무시 (안 올 수도 있어 시각으로)
+  const a = e.target.dataset.a;
+  if (a === "prev") pvMove(-1);
+  else if (a === "next") pvMove(1);
+  else if (a === "keep" && PV.keepSet) toggleKeep(PV.list[PV.i]);
+  else if (a === "cand" && !PV.keepSet) (CAND.has(PV.list[PV.i]) ? removeCandidate : addCandidate)(PV.list[PV.i]);
+  else if (e.target.tagName === "IMG" && PV.keepSet) toggleKeep(PV.list[PV.i]);  // 묶음: 사진 탭 = 남김/후보
+  else if (a === "play") pvVideo(PV.list[PV.i], true);
+  else if (a === "close" || e.target.id === "pv") pvClose();
+};
+
+// 다른 탭: 마우스 올린 사진에서 Space → 그 그리드 전체를 넘겨보기
+let hoverTile = null;
+document.addEventListener("mouseover", e => { hoverTile = e.target.closest(".tile"); });
+function pvFromTile(tile) {
+  if (!tile) return false;
+  const tiles = [...tile.closest(".grid").querySelectorAll(".tile")];
+  pvOpen(tiles.map(t => t.dataset.uuid), tiles.indexOf(tile));
+  return true;
+}
+const pvFromHover = () => pvFromTile(hoverTile);
+
+// 터치: 사진 길게 누르기(0.45초) = 크게 보기. 그 뒤 따라오는 click(남김/후보 전환)은 무시
+// 길게 누르기·밀기 뒤에 오는 click은 무시 — 터치 브라우저는 이때 click을 안 보내기도 해서
+// "다음 click 1번 무시" 플래그는 그다음 정상 탭을 먹어 버림 → 손 뗀 직후 0.4초만 무시
+let press = null, suppressUntil = 0;
+document.addEventListener("pointerdown", e => {
+  const tile = e.target.closest(".grid .tile");
+  if (!tile || e.pointerType === "mouse" || e.target.closest(".undo")) return;
+  press = { tile, x: e.clientX, y: e.clientY, fired: false, timer: setTimeout(() => {
+    press.fired = true;
+    if (current === "groups") {
+      setCursor([...view.querySelectorAll(".grid .tile")].indexOf(tile));
+      openGroupPreview();
+    } else pvFromTile(tile);
+  }, 450) };
+});
+const cancelPress = e => {
+  if (!press) return;
+  if (e.type === "pointermove" && Math.hypot(e.clientX - press.x, e.clientY - press.y) <= 10) return;
+  if (press.fired && e.type === "pointerup") suppressUntil = Date.now() + 400;
+  clearTimeout(press.timer); press = null;
+};
+["pointerup", "pointercancel", "pointermove"].forEach(ev => document.addEventListener(ev, cancelPress));
+// 묶음 화면 좌우로 밀기 = 이전/다음 묶음 (태블릿)
+let gswipe = null;
+view.addEventListener("pointerdown", e => { gswipe = current === "groups" && e.pointerType !== "mouse" ? { x: e.clientX, y: e.clientY } : null; });
+view.addEventListener("pointerup", e => {
+  if (!gswipe || PV.open) return;
+  const dx = e.clientX - gswipe.x, dy = e.clientY - gswipe.y;
+  gswipe = null;
+  if (Math.abs(dx) > 80 && Math.abs(dx) > 2 * Math.abs(dy)) { suppressUntil = Date.now() + 400; move(dx < 0 ? 1 : -1); }
+});
+document.addEventListener("click", e => {
+  if (Date.now() < suppressUntil) { e.stopPropagation(); e.preventDefault(); return; }
+  if (current !== "groups" && !e.target.closest(".undo")) pvFromTile(e.target.closest(".grid .tile"));  // 다른 탭: 탭 = 크게 보기
+}, true);
+document.addEventListener("contextmenu", e => { if (e.target.closest(".tile")) e.preventDefault(); });
+
+// ── 비슷한 묶음 ─────────────────────────────
+const G = { list: [], i: 0, cur: 0, keep: new Set() };
+const resetKeep = () => { G.cur = 0; G.keep = new Set(G.list.length ? [G.list[G.i].best] : []); };
+
+function setCursor(i) {
+  const tiles = view.querySelectorAll(".grid .tile");
+  if (!tiles.length) return;
+  G.cur = Math.max(0, Math.min(tiles.length - 1, i));
+  tiles.forEach((t, k) => t.classList.toggle("cur", k === G.cur));
+  tiles[G.cur].scrollIntoView({ block: "nearest" });
+}
+
+function toggleKeep(u) {
+  G.keep.has(u) ? G.keep.delete(u) : G.keep.add(u);
+  renderGroup();
+  if (PV.open) pvRender();
+}
+
+function renderGroup() {
+  if (!G.list.length) { view.innerHTML = `<p class="empty">정리할 묶음이 없습니다 🎉</p>`; return; }
+  const g = G.list[G.i];
+  const drop = g.photos.filter(p => !G.keep.has(p.uuid));
+  const when = g.photos[0].date.replace("T", " ").slice(0, 16);
+  view.innerHTML = `
+    <div class="bar">
+      <span class="info">묶음 <b>${G.i + 1}</b> / ${G.list.length} · ${g.photos.length}장 · ${esc(when)}${g.photos[0].city ? " · " + esc(g.photos[0].city) : ""}
+        · 남김 ${G.keep.size}장 · 삭제 후보 ${drop.length}장 (${fmt(drop.reduce((a, p) => a + p.size, 0))})</span>
+      <button id="prev">↑ 이전 묶음</button>
+      <button id="keepall">전부 남기기</button>
+      <button id="ok" class="primary">확정 <kbd>Enter</kbd></button>
+      <button id="next">다음 묶음 ↓</button>
+    </div>
+    <p class="hint">★ 추천 = ${g.people ? "얼굴(품질·눈 뜸·웃음) 65% + Apple 사진 점수 35%" : "Apple 사진 점수(초점·조명·구도)"} · ♥ 즐겨찾기 우선 · 😑 눈 감음 · 😊 웃음</p>
+    <p class="hint touch">사진 탭 = 남김✓·후보✕ · 길게 누르기 = 크게 보기(사진 탭 = 남김/후보, 좌우로 밀어 넘기기) · 화면을 좌우로 밀면 이전/다음 묶음</p>
+    <p class="hint key"><kbd>←</kbd><kbd>→</kbd> 사진 이동 · <kbd>Space</kbd> 크게 보기 · <kbd>X</kbd>/클릭 남김✓·후보✕ · <kbd>Enter</kbd> 확정 · <kbd>↑</kbd><kbd>↓</kbd> 묶음 이동</p>
+    <div class="grid">${g.photos.map(p =>
+      tile(p.uuid, scoreLabel(p), G.keep.has(p.uuid) ? "keep" : "drop", p.uuid === g.best, scoreTitle(p))).join("")}</div>
+    <div class="gbar touch"><button data-g="prev">◀</button><button data-g="keepall">전부 남기기</button>
+      <button data-g="ok" class="primary">확정 ✓ (✕ ${drop.length}장)</button><button data-g="next">▶</button></div>`;
+  view.querySelectorAll("[data-g]").forEach(b => b.onclick = () =>
+    ({ prev: () => move(-1), next: () => move(1), ok: confirmGroup, keepall: () => $("#keepall").click() })[b.dataset.g]());
+  view.querySelectorAll(".grid .tile").forEach((t, k) => {
+    t.onclick = () => { setCursor(k); toggleKeep(t.dataset.uuid); };
+    t.onmouseenter = () => setCursor(k);
+  });
+  setCursor(G.cur);
+  $("#prev").onclick = () => move(-1);
+  $("#next").onclick = () => move(1);
+  $("#ok").onclick = confirmGroup;
+  $("#keepall").onclick = () => { G.keep = new Set(g.photos.map(p => p.uuid)); confirmGroup(); };
+}
+
+const scoreLabel = p => `${Math.round(p.rank * 100)}점 · ${fmt(p.size)}` +
+  (p.favorite ? " ♥" : "") + (p.eyes_closed ? " 😑" : "") + (p.smile ? " 😊" : "");
+const scoreTitle = p => `Apple 사진 점수 ${p.score}` +
+  (p.face === null ? " · 얼굴 없음" : ` · 얼굴 ${p.face}${p.eyes_closed ? " (눈 감음)" : ""}${p.smile ? " (웃음)" : ""}`);
+
+function openGroupPreview() {
+  const g = G.list[G.i];
+  if (g) pvOpen(g.photos.map(p => p.uuid), G.cur, G.keep, i => setCursor(i));
+}
+
+// 앞으로 볼 사진 고화질 미리 받기: 지금 묶음 → 다음 묶음들 순서로 최대 300장. 묶음이 바뀔 때마다 갱신
+// (서버 대기열은 나중 요청이 맨 앞이라 지금 묶음이 항상 1순위, 다 본 묶음은 서버가 캐시·대기열에서 뺌)
+const LOOKAHEAD = 300;  // 다운로드 한계 ~1장/초 → 약 5분치 여유분, 다 본 묶음은 서버가 캐시에서 지움
+function lookahead() {
+  const uuids = [];
+  for (let k = 0; k < G.list.length && uuids.length < LOOKAHEAD; k++)
+    for (const p of G.list[(G.i + k) % G.list.length].photos)
+      if (uuids.length < LOOKAHEAD) uuids.push(p.uuid);
+  prefetch(uuids);
+}
+
+function move(d) {
+  if (busy || !G.list.length) return;
+  G.i = (G.i + d + G.list.length) % G.list.length;
+  resetKeep();
+  renderGroup();
+  lookahead();
+}
+
+let busy = false;
+async function confirmGroup() {
+  if (busy || !G.list.length) return;
+  busy = true;
+  const g = G.list[G.i], idx = G.i;
+  const reject = g.photos.filter(p => !G.keep.has(p.uuid)).map(p => p.uuid);
+  try {
+    await post("mark", { group_id: g.id, reject });
+    showErr("");
+    G.list = G.list.filter(x => x.id !== g.id);  // 인덱스 아닌 id로 제거
+    G.i = Math.min(G.i, Math.max(0, G.list.length - 1));
+    resetKeep();
+    if (PV.open) pvClose();
+    if (current === "groups") renderGroup();
+    lookahead();
+    refreshStats(); refreshCandidates();
+    showUndo(g, idx, reject.length);
+  } catch (e) {
+    showErr("확정 실패: " + e.message);
+  } finally {
+    busy = false;
+  }
+}
+
+// 확정 직후 8초 동안 되돌리기 (잘못 누른 경우: 후보로 보낸 사진을 앨범에서 빼고 묶음을 다시 목록에)
+let undoTimer = null;
+function showUndo(g, idx, n) {
+  const box = $("#undo");
+  box.innerHTML = `확정됨 · ${n ? `✕ ${n}장 후보로` : "전부 남김"} <button>↩ 되돌리기</button>`;
+  box.classList.add("show");
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => box.classList.remove("show"), 8000);
+  box.querySelector("button").onclick = async () => {
+    box.classList.remove("show");
+    try {
+      await post("unmark", { group_id: g.id });
+      G.list.splice(Math.min(idx, G.list.length), 0, g);
+      G.i = Math.min(idx, G.list.length - 1);
+      resetKeep();
+      if (current === "groups") renderGroup();
+      showOk("되돌렸어요 — 묶음을 다시 정리할 수 있어요");
+      refreshStats(); refreshCandidates();
+    } catch (e) { showErr("되돌리기 실패: " + e.message); }
+  };
+}
+
+async function showGroups() {
+  G.list = await api("groups");
+  G.i = 0;
+  resetKeep();
+  renderGroup();
+  lookahead();
+}
+
+// ── 용량 ───────────────────────────────────
+async function showSize(kind = "all") {
+  const [s, items] = await Promise.all([api("summary"), api("size?kind=" + kind)]);
+  const years = Object.entries(s.by_year);
+  const max = Math.max(1, ...years.map(([, v]) => v));
+  const kinds = [["all", "전체"], ["photo", "사진"], ["movie", "영상"]];
+  view.innerHTML = `
+    <div class="bar"><span class="info">연도별 용량</span></div>
+    <div class="years">${years.map(([y, v]) => `<div style="height:${(v / max) * 100}%" title="${y}: ${fmt(v)}"><span>${y}</span></div>`).join("")}</div>
+    <div class="bar" style="margin-top:28px">
+      <span class="info">큰 파일 상위 ${items.length}개 · ${fmt(items.reduce((a, p) => a + p.size, 0))} · 사진에 마우스 올리고 <kbd>Space</kbd> 크게 보기</span>
+      ${kinds.map(([k, l]) => `<button data-k="${k}" class="${k === kind ? "on" : ""}">${l}</button>`).join("")}
+    </div>
+    <div class="grid">${items.map(p => tile(p.uuid, `${fmt(p.size)} · ${day(p.date)}${p.movie ? " · 🎬" : ""}`)).join("")}</div>`;
+  view.querySelectorAll("button[data-k]").forEach(b => b.onclick = () => showSize(b.dataset.k));
+}
+
+// ── 위치 ───────────────────────────────────
+async function showPlaces() {
+  const places = await api("places");
+  view.innerHTML = `<div class="rows">${places.map((p, i) =>
+    `<div class="row" data-i="${i}"><span class="grow">${esc(p.country)}${p.city ? " › " + esc(p.city) : ""}</span>` +
+    `<span class="dim">${p.count.toLocaleString()}장</span><span class="dim">${fmt(p.size)}</span></div>`).join("")}</div>
+    <div id="sub" style="margin-top:16px"></div>`;
+  view.querySelectorAll(".row").forEach(r => r.onclick = () => {
+    view.querySelectorAll(".row.on").forEach(x => x.classList.remove("on"));
+    r.classList.add("on");
+    $("#sub").innerHTML = thumbs(places[r.dataset.i].uuids);
+    $("#sub").scrollIntoView({ behavior: "smooth" });
+  });
+}
+
+// ── 여행 ───────────────────────────────────
+async function showTrips() {
+  const trips = await api("trips");
+  if (!trips.length) { view.innerHTML = `<p class="empty">감지된 여행이 없습니다 (⚙️에서 기준 조절)</p>`; return; }
+  view.innerHTML = `<div class="cards">${trips.map((t, i) =>
+    `<div class="card" data-i="${i}"><b>${esc(t.name)}</b><span>${day(t.start)} ~ ${day(t.end)} · ${t.count}장 · ${fmt(t.size)}</span></div>`).join("")}</div>
+    <div id="sub"></div>`;
+  view.querySelectorAll(".card").forEach(c => c.onclick = () => {
+    view.querySelectorAll(".card.on").forEach(x => x.classList.remove("on"));
+    c.classList.add("on");
+    $("#sub").innerHTML = thumbs(trips[c.dataset.i].uuids);
+  });
+}
+
+// ── ⚙️ 추출 파라미터 ─────────────────────────
+const KNOBS = [
+  ["묶음 (비슷한 사진)"],
+  ["hash_max", "유사도 허용치", 0, 40, 1, "", "↑ 느슨(포즈 많이 달라도 묶음) · ↓ 엄격(거의 똑같은 것만)"],
+  ["gap_min", "연속 촬영 간격", 0.5, 60, 0.5, "분", "이 시간 안에 이어 찍어야 같은 묶음"],
+  ["near_m", "같은 장소 거리", 10, 2000, 10, "m", "GPS가 이보다 멀면 다른 묶음"],
+  ["min_group", "묶음 최소 장수", 2, 20, 1, "장", ""],
+  ["여행"],
+  ["trip_km", "집에서 거리", 10, 500, 10, "km", "모든 집에서 이만큼 떨어져야 여행"],
+  ["min_trip", "여행 최소 장수", 1, 100, 1, "장", ""],
+  ["home_days", "집 판정 촬영 일수", 5, 200, 5, "일", "서로 다른 날 이만큼 찍은 곳 = 집(여러 곳 가능)"],
+];
+let ST = null, stTimer = null;
+function renderSettings() {
+  const v = ST.values;
+  $("#st").innerHTML = `<h3>⚙️ 추출 파라미터</h3>` + KNOBS.map(k => k.length === 1 ? `<div class="sec">${k[0]}</div>` :
+    `<label><div class="row"><span>${k[1]}</span><b id="v_${k[0]}">${v[k[0]]}${k[5]}</b></div>
+      <input type="range" data-k="${k[0]}" min="${k[2]}" max="${k[3]}" step="${k[4]}" value="${v[k[0]]}">
+      ${k[6] ? `<div class="help">${k[6]}</div>` : ""}</label>`).join("") +
+    `<div class="res" id="st_res">묶음 <b>${ST.groups}</b>개 · 여행 <b>${ST.trips}</b>개</div>
+     <div class="bar" style="margin:10px 0 0"><span class="info"></span><button id="st_def">기본값으로</button><button id="st_close" class="primary">닫기</button></div>`;
+  $("#st").querySelectorAll("input[type=range]").forEach(inp => inp.oninput = () => {
+    const k = inp.dataset.k, knob = KNOBS.find(x => x[0] === k);
+    $("#v_" + k).textContent = inp.value + knob[5];
+    $("#st_res").textContent = "다시 계산 중…";
+    clearTimeout(stTimer);
+    stTimer = setTimeout(() => applySettings({ [k]: Number(inp.value) }), 250);
+  });
+  $("#st_def").onclick = () => applySettings(ST.defaults, true);
+  $("#st_close").onclick = closeSettings;
+}
+async function applySettings(body, rerender = false) {
+  try {
+    ST = await post("settings", body);
+    if (rerender) renderSettings();
+    else $("#st_res").innerHTML = `묶음 <b>${ST.groups}</b>개 · 여행 <b>${ST.trips}</b>개`;
+    refreshStats();
+  } catch (e) { showErr("설정 실패: " + e.message); }
+}
+async function openSettings() { ST = await api("settings"); renderSettings(); $("#st").classList.add("open"); }
+function closeSettings() { $("#st").classList.remove("open"); openTab(current); }  // 바뀐 기준으로 현재 탭 새로 그림
+$("#stbtn").onclick = () => $("#st").classList.contains("open") ? closeSettings() : openSettings();
+
+// ── 탭 / 키보드 ─────────────────────────────
+// ── 삭제 후보 ────────────────────────────────
+async function showCands() {
+  const c = await api("candidates");
+  CAND = new Set(c.uuids);
+  if (!c.count) { view.innerHTML = `<p class="empty">삭제 후보가 없습니다</p>`; return; }
+  view.innerHTML = `
+    <div class="bar"><span class="info">삭제 후보 ${c.count}장 · ${fmt(c.size)} — 지우기 전에 한 번 더 확인</span>
+      <button id="candDel" class="danger">🗑 전부 삭제 (Mac에서 승인)</button></div>
+    <p class="hint">사진 탭 = 크게 보기(↩ 후보에서 빼기 버튼) · 모서리 <b>↩</b> = 바로 후보에서 빼기 (사진은 그대로)</p>
+    <div class="grid">${c.items.map(p => tile(p.uuid, fmt(p.size) + (p.movie ? " · 🎬" : ""))
+      .replace('<span class="badge"></span>', '<button class="undo" title="후보에서 빼기">↩</button>')).join("")}</div>`;
+  $("#candDel").onclick = () => $("#delbtn").click();
+  view.querySelectorAll(".tile .undo").forEach(b => b.onclick = e => { e.stopPropagation(); removeCandidate(b.closest(".tile").dataset.uuid); });
+}
+
+const tabs = { groups: showGroups, size: () => showSize(), places: showPlaces, trips: showTrips, cands: showCands };
+let current = "groups";
+async function openTab(tab) {
+  current = tab;
+  document.querySelectorAll("nav button[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  view.innerHTML = `<p class="empty">불러오는 중…</p>`;
+  try { await tabs[tab](); } catch (e) { showErr(e.message); }
+}
+document.querySelectorAll("nav button[data-tab]").forEach(b => b.onclick = () => openTab(b.dataset.tab));
+
+document.addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.target.tagName === "INPUT") return;
+  const k = e.code;  // e.code → 한글 입력 상태에서도 X 동작
+  if (PV.open) {
+    if (k === "Space" || k === "Escape") { e.preventDefault(); pvClose(); }
+    else if (k === "ArrowLeft") { e.preventDefault(); pvMove(-1); }
+    else if (k === "ArrowRight") { e.preventDefault(); pvMove(1); }
+    else if (k === "KeyX" && PV.keepSet && !e.repeat) toggleKeep(PV.list[PV.i]);
+    return;
+  }
+  if (k === "Escape" && $("#st").classList.contains("open")) return closeSettings();
+  if (current !== "groups") {
+    if (k === "Space" && pvFromHover()) e.preventDefault();
+    return;
+  }
+  if (e.repeat && (k === "Enter" || k === "KeyX")) return;  // 키 누르고 있기 → 연속 확정 방지
+  const g = G.list[G.i];
+  if (k === "ArrowLeft") { e.preventDefault(); setCursor(G.cur - 1); }
+  else if (k === "ArrowRight") { e.preventDefault(); setCursor(G.cur + 1); }
+  else if (k === "ArrowUp") { e.preventDefault(); move(-1); }
+  else if (k === "ArrowDown") { e.preventDefault(); move(1); }
+  else if (k === "Space") { e.preventDefault(); openGroupPreview(); }
+  else if (k === "KeyX" && g) toggleKeep(g.photos[G.cur].uuid);
+  else if (k === "Enter") { e.preventDefault(); confirmGroup(); }
+});
+$("#reloadbtn").onclick = async () => {
+  const b = $("#reloadbtn"); b.disabled = true; b.textContent = "⟳ 읽는 중…";
+  try {
+    const r = await post("reload", {});
+    showOk(`라이브러리 다시 읽음: 사진 ${r.count.toLocaleString()}장`);
+    await Promise.all([refreshStats(), refreshCandidates()]);
+    openTab(current);
+  } catch (e) { showErr("새로고침 실패: " + e.message); }
+  finally { b.disabled = false; b.textContent = "⟳"; }
+};
+refreshStats().catch(e => showErr(e.message));
+refreshCandidates();
+openTab("groups");
+</script>
+</body>
+</html>
