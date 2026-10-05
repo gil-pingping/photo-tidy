@@ -6,10 +6,10 @@ import mimetypes
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
-import time
 import webbrowser
 from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -320,7 +320,7 @@ def tailscale_info() -> tuple[str, str]:
     """(Tailscale IPv4, MagicDNS 이름). 꺼져 있으면 RuntimeError."""
     exe = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
     # TERM이 없으면(로그인 항목 등) Tailscale 앱 실행 파일이 CLI가 아니라 GUI로 동작하려다 실패함 (실측)
-    env = {**os.environ, "TERM": os.environ.get("TERM", "xterm")}
+    env = {"TERM": "xterm", **os.environ}
     r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=10, env=env)
     me = json.loads(r.stdout or "{}").get("Self") or {}
     ips = [i for i in me.get("TailscaleIPs", []) if "." in i]
@@ -479,6 +479,13 @@ def make_handler(app: App, allowed_hosts: set[str] | None = None, allowed_nets=N
     return Handler
 
 
+def already_running(port: int) -> bool:
+    """이 포트에 이미 서버가 있나 — bind로는 못 앎 (macOS는 0.0.0.0 서버가 있어도 127.0.0.1 bind 허용)."""
+    with socket.socket() as s:
+        s.settimeout(1)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="photo-tidy", description="Photos 라이브러리 정리 웹 UI")
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 이면 같은 Wi-Fi 기기에서 접속 가능")
@@ -494,24 +501,38 @@ def main(argv=None):
         from . import autostart
         if a.uninstall_autostart:
             autostart.uninstall()
-            sys.exit("자동 실행을 해제했습니다.")
+            print("자동 실행을 해제했습니다.")
+            return
         print("런처 앱 빌드 중… (swiftc)", flush=True)
         autostart.install()
         subprocess.run(["open", "-R", str(autostart.APP)])  # Finder에서 앱 보여주기 (권한 목록에 끌어 넣기용)
         subprocess.run(["open", "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles"])
-        sys.exit(f"자동 실행 등록 완료 — 로그인할 때 '{autostart.APP.stem}' 앱이 서버를 띄웁니다.\n"
-                 "→ 열린 '전체 디스크 접근 권한' 목록에 Finder의 'photo-tidy server' 앱을 끌어 넣고 켜 주세요 (최초 1회).\n"
-                 f"→ 로그: {autostart.CACHE_DIR / 'server.log'}")
-    if a.tailscale:
-        for attempt in range(25):  # 로그인 직후엔 Tailscale이 아직 안 켜졌을 수 있음 → 최대 ~2분 대기
-            try:
-                ts_ip, ts_name = tailscale_info()
-                break
-            except Exception as e:
-                if attempt == 24:
-                    sys.exit(f"Tailscale을 쓸 수 없음: {e}\n→ Mac에서 Tailscale을 켜고 다시 실행하세요.")
-                print(f"Tailscale 기다리는 중… ({e})", flush=True)
-                time.sleep(5)
+        print(f"자동 실행 등록 완료 — 로그인할 때 '{autostart.APP.stem}' 앱이 서버를 띄웁니다.\n"
+              "→ 열린 '전체 디스크 접근 권한' 목록에 Finder의 'photo-tidy server' 앱을 끌어 넣고 켜 주세요 (최초 1회).\n"
+              f"→ 로그: {autostart.CACHE_DIR / 'server.log'}")
+        return
+    host, nets = a.host, None
+    loopback = host in ("127.0.0.1", "localhost")
+    allowed = {f"localhost:{a.port}", f"127.0.0.1:{a.port}"} if loopback else None
+    url = f"http://{'localhost' if loopback else host}:{a.port}"
+    if a.tailscale:  # 모든 인터페이스에서 받되 Mac 자신과 Tailscale 기기만 허용
+        # 로그인 직후 Tailscale이 아직 안 켜졌으면 여기서 끝남 → 자동 실행 런처가 30초 뒤 다시 띄움
+        try:
+            ts_ip, ts_name = tailscale_info()
+        except Exception as e:
+            sys.exit(f"Tailscale을 쓸 수 없음: {e}\n→ Mac에서 Tailscale을 켜고 다시 실행하세요.")
+        host, nets = "0.0.0.0", [TAILNET]
+        short = ts_name.split(".")[0]
+        allowed = {f"{h}:{a.port}" for h in ("localhost", "127.0.0.1", ts_ip, short, ts_name)}
+        url = f"http://{short}:{a.port}"
+    # 포트는 라이브러리 읽기(수십 초) 전에 잡음 → 이미 실행 중이면 바로 끝남 (런처 재시도마다 헛로딩 방지)
+    # 핸들러는 앱이 준비된 뒤 연결; 그 사이 들어온 요청은 대기열에서 기다림
+    if already_running(a.port):  # 자동 실행 서버와 수동 실행이 겹치면 상태 파일을 둘이 따로 고쳐 씀
+        sys.exit(f"이미 실행 중 — http://localhost:{a.port} 를 여세요.")
+    try:
+        srv = ThreadingHTTPServer((host, a.port), BaseHTTPRequestHandler)
+    except OSError as e:
+        sys.exit(f"포트 {a.port}을(를) 쓸 수 없음 ({e.strerror}) — 이미 실행 중이면 http://localhost:{a.port} 를 여세요.")
     print("Photos 라이브러리 읽는 중…", flush=True)
     try:
         photos = library.load(a.library)
@@ -539,20 +560,8 @@ def main(argv=None):
         library._helper()  # 사진 헬퍼 미리 빌드 (최초 1회 swiftc ~10초)
     except Exception as e:
         print(f"주의: 사진 헬퍼 빌드 실패 → 고화질 크게 보기·삭제 불가 ({e})")
-    host, nets = a.host, None
-    loopback = host in ("127.0.0.1", "localhost")
-    allowed = {f"localhost:{a.port}", f"127.0.0.1:{a.port}"} if loopback else None
-    url = f"http://{'localhost' if loopback else host}:{a.port}"
-    if a.tailscale:  # 모든 인터페이스에서 받되 Mac 자신과 Tailscale 기기만 허용
-        host, nets = "0.0.0.0", [TAILNET]
-        short = ts_name.split(".")[0]
-        allowed = {f"{h}:{a.port}" for h in ("localhost", "127.0.0.1", ts_ip, short, ts_name)}
-        url = f"http://{short}:{a.port}"
     # 멀티스레드: 영상 전송·새로고침 중에도 썸네일이 막히지 않게. 상태 변경은 App.lock으로 직렬화
-    try:
-        srv = ThreadingHTTPServer((host, a.port), make_handler(app, allowed, nets))
-    except OSError as e:
-        sys.exit(f"포트 {a.port}을(를) 쓸 수 없음 ({e.strerror}) — 이미 실행 중이면 http://localhost:{a.port} 를 여세요.")
+    srv.RequestHandlerClass = make_handler(app, allowed, nets)
     srv.daemon_threads = True
     print(f"사진 {len(photos)}장, 묶음 {len(app.groups)}개, 여행 {len(app.trips)}개 → {url}", flush=True)
     if a.tailscale:

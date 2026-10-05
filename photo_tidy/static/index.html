@@ -821,7 +821,7 @@ async function loadVideos() {
       const strip = p.frames ? Array.from({ length: p.frames }, (_, i) => `<img loading="lazy" draggable="false" src="/frame/${u}/${i}">`).join("")
                              : `<img loading="lazy" draggable="false" src="/thumb/${u}"><span class="nof">장면 미리보기 없음 — 탭해서 크게 보기</span>`;
       box.insertAdjacentHTML("beforeend", `<div class="vrow${s ? " sel" : ""}${c ? " cand" : ""}" data-uuid="${esc(p.uuid)}">
-        <div class="vinfo"><b>${p.favorite ? "★ " : ""}${fmt(p.size)}</b><span>${p.duration ? clock(p.duration) + " · " : ""}${day(p.date)}${p.city ? " · " + esc(p.city) : ""}</span>
+        <div class="vinfo"><b>${p.favorite ? "♥ " : ""}${fmt(p.size)}</b><span>${p.duration ? clock(p.duration) + " · " : ""}${day(p.date)}${p.city ? " · " + esc(p.city) : ""}</span>
           <span class="vstate">${c ? "🗑 후보" : s ? "✕ 선택됨" : "탭해서 선택"}</span></div>
         <div class="vstrip">${strip}</div></div>`);
     }

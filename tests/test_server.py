@@ -484,3 +484,16 @@ def test_delete_reports_and_accumulates_freed_bytes(tmp_path):
     assert app.get("summary", {})["deleted_bytes"] == 0
     assert app.delete_candidates() == {"deleted": 2, "bytes": 20}
     assert mk().get("summary", {})["deleted_bytes"] == 20  # 재시작해도 누적 유지
+
+
+def test_already_running_detects_wildcard_listener():
+    # macOS: 0.0.0.0:포트 서버가 있어도 SO_REUSEADDR로 127.0.0.1:포트 bind가 성공함 → 접속해 봐서 판단
+    import socket
+    from photo_tidy.server import already_running
+    s = socket.socket()
+    s.bind(("0.0.0.0", 0))
+    s.listen()
+    port = s.getsockname()[1]
+    assert already_running(port)
+    s.close()
+    assert not already_running(port)

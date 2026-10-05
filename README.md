@@ -12,7 +12,7 @@ Tidy your **iCloud / Mac Photos** library from a local web UI — on your Mac, o
 |---|---|
 | **Similar groups** | Shots taken in a row at the same spot (≤5 min, ≤100 m, perceptually similar) are grouped; the best one is suggested (★), the rest are marked as delete candidates. One key/tap confirms the whole group. |
 | **All** | The whole library by month. Filters: 📱 screenshots · 😵 failed shots (Apple's on-device "failure" score) · 💥 burst leftovers · 🎬 videos · oldest. Select by tap, by month, or the whole filter. |
-| **Videos** | Largest first, with duration and the storyboard frames Photos keeps locally — see what a video is without downloading it. Favorites are marked ★. |
+| **Videos** | Largest first, with duration and the storyboard frames Photos keeps locally — see what a video is without downloading it. Favorites are marked ♥. |
 | **Size / Places / Trips** | Biggest items, country › city, and trips detected automatically (consecutive days ≥50 km from every "home"). |
 | **Candidates** | Everything you marked, to review once more before deleting; remove items with ↩. |
 

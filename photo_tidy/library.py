@@ -355,19 +355,24 @@ def _signing_identity() -> str:
 
 
 def _helper(app_dir: Path = CACHE_DIR / "photo-tidy.app") -> Path:
-    # 경로 고정 → 권한 팝업에 'photo-tidy'로 표시, 소스가 바뀔 때만 제자리 재빌드
-    # (Apple Development 서명이면 재빌드해도 사진 권한 유지, ad-hoc이면 재빌드마다 다시 물음)
-    # 스탬프는 번들 밖에 (번들 안의 서명 안 된 파일은 정식 서명을 깨뜨림)
-    exe, stamp = app_dir / "Contents/MacOS/PhotoTidyHelper", app_dir.with_suffix(".sha1")
+    # 경로 고정 → 권한 팝업에 'photo-tidy'로 표시
+    return build_app(app_dir, "PhotoTidyHelper", HELPER_SWIFT, HELPER_PLIST)
+
+
+def build_app(app_dir: Path, name: str, swift: str, plist: str) -> Path:
+    """Swift 소스 → 서명된 .app. 소스가 바뀔 때만 제자리 재빌드
+    (Apple Development 서명이면 재빌드해도 권한 유지, ad-hoc이면 재빌드마다 권한이 풀릴 수 있음).
+    스탬프는 번들 밖에 (번들 안의 서명 안 된 파일은 정식 서명을 깨뜨림)."""
+    exe, stamp = app_dir / "Contents/MacOS" / name, app_dir.with_suffix(".sha1")
     ident = _signing_identity()
-    sha = hashlib.sha1((HELPER_SWIFT + HELPER_PLIST + ident).encode()).hexdigest()
+    sha = hashlib.sha1((swift + plist + ident).encode()).hexdigest()
     if exe.exists() and stamp.exists() and stamp.read_text() == sha:
         return app_dir
     exe.parent.mkdir(parents=True, exist_ok=True)
-    src = app_dir.parent / "helper.swift"
-    src.write_text(HELPER_SWIFT)
+    src = app_dir.parent / f"{name}.swift"
+    src.write_text(swift)
     subprocess.run(["swiftc", "-O", str(src), "-o", str(exe)], check=True, capture_output=True, timeout=600)
-    (app_dir / "Contents/Info.plist").write_text(HELPER_PLIST)
+    (app_dir / "Contents/Info.plist").write_text(plist)
     subprocess.run(["codesign", "-s", ident, "--force", str(app_dir)], check=True, capture_output=True)
     stamp.write_text(sha)
     return app_dir
