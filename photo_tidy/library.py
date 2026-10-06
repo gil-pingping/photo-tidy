@@ -47,6 +47,7 @@ def load(library: str | None = None) -> list[Photo]:
             failure=p.score.failure if p.score else 0.0,
             burst_extra=bool(p.burst) and not (p.burst_selected or p.burst_default_pick),
             duration=(p.exif_info.duration or 0.0) if p.ismovie and p.exif_info else 0.0,
+            filename=p.original_filename or "", added=p.date_added, has_exif=bool(p.exif_info and p.exif_info.camera_make),
         ))
     return out
 

@@ -73,6 +73,18 @@ macOS ties Full Disk Access to the app that starts the server, so after installi
 
 If the server exits (crash, Tailscale not up yet, port busy), the launcher restarts it after 30 s. To run new code after `uv tool install --force --reinstall …`, just `pkill -f bin/photo-tidy` — or re-run `--install-autostart`.
 
+### Recover capture dates (cloud downloads)
+
+Photos downloaded from a cloud service (e.g. Naver MYBOX) often arrive without EXIF, so Photos shows the download day for all of them.
+
+```bash
+photo-tidy --fix-dates                   # report only: how many photos lost their date, and how precisely each can be recovered
+photo-tidy --fix-dates exact,day,month   # apply those tiers (originals backed up to ~/.photo_tidy/dates-backup.json)
+photo-tidy --undo-dates                  # restore the original dates
+```
+
+How dates are recovered: a timestamp in the filename (`20170819_161549.jpg`, `Screenshot_2017-08-19-…`) is taken as is (**exact**); MYBOX filenames `<file-id>_<download-time>` carry an upload-ordered id, so a photo is placed between the nearest dated photos by id (tiers **day/month/season/year** by the width of that window; late uploads of old photos are skipped as anchors). On a 3,374-photo download this put 90% within a day and 92% within a month under a strict hold-out test. Hidden photos cannot be changed (PhotoKit); the per-photo plan is written to `~/.photo_tidy/dates-plan.csv`.
+
 ## How it works
 
 - Reads the Photos database read-only with [osxphotos](https://github.com/RhetTbull/osxphotos); hashes the local thumbnails with [imagehash](https://github.com/JohannesBuchner/imagehash) (no originals downloaded).

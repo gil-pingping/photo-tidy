@@ -486,6 +486,15 @@ def already_running(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _load_or_exit(path):
+    print("Photos 라이브러리 읽는 중…", flush=True)
+    try:
+        return library.load(path)
+    except Exception as e:
+        sys.exit(f"라이브러리를 읽을 수 없음: {e}\n→ 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에 "
+                 "서버를 띄운 앱(터미널, 또는 자동 실행이면 'photo-tidy server')을 추가하고 다시 실행하세요.")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="photo-tidy", description="Photos 라이브러리 정리 웹 UI")
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 이면 같은 Wi-Fi 기기에서 접속 가능")
@@ -496,7 +505,24 @@ def main(argv=None):
                     help="내 Tailscale 기기(태블릿·폰)에서 접속 — 같은 Wi-Fi의 다른 기기는 차단")
     ap.add_argument("--install-autostart", action="store_true", help="로그인할 때 자동 실행 (--tailscale)")
     ap.add_argument("--uninstall-autostart", action="store_true", help="자동 실행 해제")
+    ap.add_argument("--fix-dates", nargs="?", const="report", metavar="TIERS",
+                    help="클라우드(MYBOX 등)에서 받아 날짜가 '가져온 날'로 몰린 사진의 촬영 날짜 복원. "
+                         "값 없이 → 보고서만. 예: --fix-dates exact,day,month → 그 등급만 적용")
+    ap.add_argument("--undo-dates", action="store_true", help="--fix-dates 로 바꾼 날짜를 원래대로")
     a = ap.parse_args(argv)
+    if a.fix_dates or a.undo_dates:
+        from . import dates
+        backup = library.CACHE_DIR / "dates-backup.json"
+        if a.undo_dates:
+            print(f"{dates.undo(backup, library.set_dates)}장 되돌림")
+            return
+        items = dates.items_from(_load_or_exit(a.library))
+        est = dates.estimate(items)
+        print(dates.report(est, items, library.CACHE_DIR / "dates-plan.csv"))
+        if a.fix_dates != "report":
+            n = dates.apply(items, est, set(a.fix_dates.split(",")), backup, library.set_dates)
+            print(f"{n}장 날짜 변경 — 원래 날짜 백업: {backup}  되돌리기: photo-tidy --undo-dates")
+        return
     if a.install_autostart or a.uninstall_autostart:
         from . import autostart
         if a.uninstall_autostart:
@@ -533,12 +559,7 @@ def main(argv=None):
         srv = ThreadingHTTPServer((host, a.port), BaseHTTPRequestHandler)
     except OSError as e:
         sys.exit(f"포트 {a.port}을(를) 쓸 수 없음 ({e.strerror}) — 이미 실행 중이면 http://localhost:{a.port} 를 여세요.")
-    print("Photos 라이브러리 읽는 중…", flush=True)
-    try:
-        photos = library.load(a.library)
-    except Exception as e:
-        sys.exit(f"라이브러리를 읽을 수 없음: {e}\n→ 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에 "
-                 "서버를 띄운 앱(터미널, 또는 자동 실행이면 'photo-tidy server')을 추가하고 다시 실행하세요.")
+    photos = _load_or_exit(a.library)
     library.add_hashes(photos)
 
     def reload_library():

@@ -48,6 +48,9 @@ class Photo:
     failure: float = 0.0  # Apple 실패작 점수 (음수일수록 어둡·흐림·실수로 찍힌 사진)
     burst_extra: bool = False  # iPhone 연사에서 대표가 아닌 나머지
     duration: float = 0.0  # 영상 길이(초)
+    filename: str = ""  # 원본 파일명 (날짜 복원 단서)
+    added: datetime | None = None  # 라이브러리에 들어온 시각
+    has_exif: bool = False  # 카메라 정보 있음
 
 
 def has_gps(p: Photo) -> bool:
