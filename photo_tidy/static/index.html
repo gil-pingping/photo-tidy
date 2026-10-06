@@ -185,7 +185,8 @@
     #stats { display:none; }
   }
   @media (pointer: fine) { .touch { display:none; } }
-  @media (max-width: 900px) { .brand span { display:none; } header { gap:10px; padding:8px 12px; } main { padding:14px 12px 100px; } }
+  @media (max-width: 900px) { .brand span, #stats { display:none; } header { gap:10px; padding:8px 12px; } main { padding:14px 12px 100px; } }  /* 태블릿: 통계 글귀 숨겨 삭제 버튼이 안 접히게 */
+  #delbtn { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -923,7 +924,8 @@ $("#reloadbtn").onclick = async () => {
 };
 refreshStats().catch(e => showErr(e.message));
 refreshCandidates();
-openTab("groups");
+const TABS = [...document.querySelectorAll("nav button[data-tab]")].map(b => b.dataset.tab);
+openTab(TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "groups");  // #videos 처럼 탭 바로 열기
 </script>
 </body>
 </html>

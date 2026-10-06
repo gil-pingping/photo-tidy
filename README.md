@@ -20,6 +20,35 @@ Nothing is deleted until you press 🗑 and approve the **macOS confirmation dia
 
 Everything runs **locally** on your Mac. No photos or metadata are uploaded anywhere.
 
+## Screenshots
+
+Captured from the synthetic demo library (`uv run python tests/demo.py`), so no real photos appear.
+
+| Similar groups — ★ best shot suggested, the rest marked ✕ | Large preview (`Space` / long-press) |
+|---|---|
+| ![Similar groups](assets/groups.png) | ![Large preview](assets/preview.png) |
+
+| All — filters, by month, select a whole month | Candidates — one more look, ↩ to restore, 🗑 to delete |
+|---|---|
+| ![All tab](assets/all.png) | ![Candidates tab](assets/candidates.png) |
+
+Culling one group: `→` `→` `X` keeps a second shot, `Space` checks it large, `Enter` confirms — the 12 rejected photos land in the candidates album and the next group opens.
+
+![Culling a group](assets/cull.gif)
+
+<p align="center"><img src="assets/tablet.png" width="320" alt="Tablet layout: bottom button bar, tap to toggle, long-press to preview"></p>
+
+### How a photo travels
+
+```mermaid
+flowchart LR
+  A["Photos library<br/>(read-only, osxphotos)"] --> B["pHash + time + GPS<br/>→ similar groups, trips, filters"]
+  B --> C["Web UI<br/>★ best shot suggested"]
+  C -->|"Enter / tap"| D["Album<br/>“photo-tidy 삭제 후보”"]
+  D -->|"🗑 + macOS confirm dialog"| E["Photos › Recently Deleted<br/>(30 days)"]
+  C -. "↩ undo (8 s) / ↩ in Candidates" .-> B
+```
+
 ## Requirements
 
 - macOS with the Photos app (iCloud Photos optional — "Optimize Mac Storage" is supported)
@@ -83,6 +112,32 @@ photo-tidy --fix-dates exact,day,month   # apply those tiers (originals backed u
 photo-tidy --undo-dates                  # restore the original dates
 ```
 
+```text
+$ photo-tidy --fix-dates
+Photos 라이브러리 읽는 중…
+날짜가 '가져온 날'로 된 사진 3374장 — 복원 가능 3331장, 단서 없음 43장 (저장·받은 이미지 등)
+  exact       54장
+  day        949장
+  month     2301장
+  season      48장
+  year         6장
+→ 사진별 계획: ~/.photo_tidy/dates-plan.csv
+```
+
+```mermaid
+flowchart TD
+  S["Photo whose date = import day<br/>and no camera EXIF"] --> F{"Timestamp in the filename?"}
+  F -->|"20170819_161549.jpg<br/>Screenshot_2017-08-19-…"| X["exact"]
+  F -->|"MYBOX: fileid_downloadtime"| I["Interpolate by file id<br/>between the nearest dated photos<br/>(late uploads of old photos skipped)"]
+  I --> W{"Window width"}
+  W -->|"≤ 3 d"| D1["day"]
+  W -->|"≤ 45 d"| M["month"]
+  W -->|"≤ 120 d"| SE["season"]
+  W -->|"wider"| Y["year"]
+  X & D1 & M --> AP["--fix-dates exact,day,month<br/>backup → PhotoKit creationDate"]
+  AP --> U["--undo-dates"]
+```
+
 How dates are recovered: a timestamp in the filename (`20170819_161549.jpg`, `Screenshot_2017-08-19-…`) is taken as is (**exact**); MYBOX filenames `<file-id>_<download-time>` carry an upload-ordered id, so a photo is placed between the nearest dated photos by id (tiers **day/month/season/year** by the width of that window; late uploads of old photos are skipped as anchors). On a 3,374-photo download this put 90% within a day and 92% within a month under a strict hold-out test. Hidden photos cannot be changed (PhotoKit); the per-photo plan is written to `~/.photo_tidy/dates-plan.csv`.
 
 ## How it works
@@ -123,7 +178,7 @@ uv run pytest -q              # unit + HTTP tests (no Photos access needed)
 uv run python tests/demo.py   # synthetic library UI at http://localhost:8799
 ```
 
-Structure: `library.py` (Photos access, hashing, PhotoKit helper) → `analyze.py` (grouping, best shot, trips, places — pure functions) → `server.py` (stdlib HTTP API + CLI) → `autostart.py` (login item) → `static/index.html` (vanilla JS).
+Structure: `library.py` (Photos access, hashing, PhotoKit helper) → `analyze.py` (grouping, best shot, trips, places — pure functions) → `dates.py` (capture-date recovery) → `server.py` (stdlib HTTP API + CLI) → `autostart.py` (login item) → `static/index.html` (vanilla JS). Tabs are deep-linkable: `http://localhost:8765/#videos`.
 
 ## License
 
