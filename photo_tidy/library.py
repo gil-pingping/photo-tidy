@@ -286,6 +286,25 @@ func unalbum(_ name: String, _ idsPath: String) {
         }
     }
 }
+// 날짜 고치기: 줄마다 "uuid<TAB>유닉스초" — 사진 앱 '날짜 및 시간 조정'과 같은 creationDate 변경 (iCloud 동기화됨)
+func setdate(_ path: String) {
+    var want: [String: Date] = [:]
+    for line in ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n") {
+        let f = line.split(separator: "\t")
+        if f.count == 2, let t = Double(f[1]) { want[String(f[0]) + "/L0/001"] = Date(timeIntervalSince1970: t) }
+    }
+    try? FileManager.default.removeItem(atPath: path)
+    let assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(want.keys), options: nil)
+    if assets.count == 0 { finish(["updated": 0]) }
+    PHPhotoLibrary.shared().performChanges({
+        assets.enumerateObjects { a, _, _ in PHAssetChangeRequest(for: a).creationDate = want[a.localIdentifier] }
+    }) { ok, err in
+        DispatchQueue.main.async {
+            if ok { finish(["updated": assets.count]) }
+            finish(["error": err?.localizedDescription ?? "날짜 바꾸기 실패"])
+        }
+    }
+}
 func video(_ u: String, _ outPath: String, _ quality: Int, _ preset: String) {
     func fail(_ msg: String) -> Never {
         try? msg.write(toFile: outPath + ".err", atomically: true, encoding: .utf8)
@@ -326,6 +345,7 @@ PHPhotoLibrary.requestAuthorization(for: .readWrite) { s in
         if mode == "serve" { serve(args[2], args[3], opt(4, 2), opt(5, 1600)) }
         else if mode == "unalbum" { unalbum(args[2], args[3]) }
         else if mode == "album" { album(args[2], args[3]) }
+        else if mode == "setdate" { setdate(args[2]) }
         else if mode == "video" { video(args[2], args[3], opt(4, 2), args.count > 5 ? args[5] : AVAssetExportPreset960x540) }
         else { delete(args[2]) }  // 비동기 시작만 하고 돌아옴
     }
@@ -396,6 +416,13 @@ def _run_helper(mode: str, uuids: list[str], *args: str) -> dict:
     if "error" in res:
         raise RuntimeError(res["error"])
     return res
+
+
+def set_dates(dates: dict, helper=None) -> int:
+    """{uuid: 시간대 있는 datetime} → 사진 날짜 변경 (PhotoKit). 바뀐 장수 반환. 500장씩.
+    '가려진 항목'은 잠겨 있어 PhotoKit이 못 찾음 (includeHiddenAssets로도 안 됨, 실측) → 건너뜀."""
+    lines = [f"{u}\t{d.timestamp()}" for u, d in dates.items()]
+    return sum((helper or _run_helper)("setdate", lines[i:i + 500])["updated"] for i in range(0, len(lines), 500))
 
 
 def delete_photos(uuids: list[str]) -> list[str]:

@@ -129,3 +129,18 @@ def test_big_helper_log_is_reset_before_launch(tmp_path, monkeypatch):
     library.trim_log(log)
     assert log.read_text() == "small"
     library.trim_log(tmp_path / "none.log")  # 없으면 무시
+
+
+def test_set_dates_sends_uuid_and_epoch_in_chunks():
+    from datetime import timedelta, timezone
+    calls = []
+
+    def fake(mode, lines):
+        calls.append((mode, lines))
+        return {"updated": len(lines)}
+
+    d = datetime(2018, 7, 4, 11, 47, 21, tzinfo=timezone(timedelta(hours=9)))
+    assert library.set_dates({f"u{i}": d for i in range(600)}, helper=fake) == 600
+    assert [(m, len(ls)) for m, ls in calls] == [("setdate", 500), ("setdate", 100)]
+    assert calls[0][1][0] == f"u0\t{d.timestamp()}"  # 절대 시각(UTC 초) → 시간대 혼동 없음
+    assert library.set_dates({}, helper=fake) == 0
